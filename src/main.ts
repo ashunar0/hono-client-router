@@ -22,10 +22,29 @@ function fetchUser(id: string, signal: AbortSignal) {
   });
 }
 
+// レイアウト: /users 配下は、ページの中身をサイドバー付きの枠で包む
+app.use("/users/*", async (c, next) => {
+  c.setRenderer((content) =>
+    c.html(html`
+      <div style="display: flex; gap: 24px">
+        <aside>
+          <ul>
+            <li><a href="/users/1">ユーザー1</a></li>
+            <li><a href="/users/2">ユーザー2</a></li>
+          </ul>
+        </aside>
+        <section>${content}</section>
+      </div>
+    `),
+  );
+  await next();
+});
+
+app.get("/users", (c) => c.render(html`<p>ユーザーを選択してください</p>`));
 app.get("/users/:id", async (c) => {
   // render が Request に載せた signal を受け取る（React Router の request.signal と同じ）
   const user = await fetchUser(c.req.param("id"), c.req.raw.signal);
-  return c.html(html`<h1>${user.name}</h1><p>ID: ${user.id}</p>`);
+  return c.render(html`<h1>${user.name}</h1><p>ID: ${user.id}</p>`);
 });
 app.get("/login", (c) =>
   c.html(html`
