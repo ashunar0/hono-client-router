@@ -9,9 +9,23 @@ let loggedIn = false;
 // ルート定義: ハンドラは HTML を返すだけ（案 X）
 app.get("/", (c) => c.html(html`<h1>Home</h1>`));
 app.get("/about", (c) => c.html(html`<h1>About</h1>`));
-app.get("/users/:id", (c) => {
-  const id = c.req.param("id");
-  return c.html(html`<h1>User ${id}</h1>`);
+// API から取ってくるふり（0〜2 秒かかる）
+// 本物の fetch(url, { signal }) なら、abort 時の中断は fetch が自動でやってくれる
+function fetchUser(id: string, signal: AbortSignal) {
+  return new Promise<{ id: string; name: string }>((resolve, reject) => {
+    const timer = setTimeout(() => resolve({ id, name: `ユーザー${id}` }), Math.random() * 2000);
+    signal.addEventListener("abort", () => {
+      console.log(`User ${id} の取得を中断した`);
+      clearTimeout(timer);
+      reject(signal.reason);
+    });
+  });
+}
+
+app.get("/users/:id", async (c) => {
+  // render が Request に載せた signal を受け取る（React Router の request.signal と同じ）
+  const user = await fetchUser(c.req.param("id"), c.req.raw.signal);
+  return c.html(html`<h1>${user.name}</h1><p>ID: ${user.id}</p>`);
 });
 app.get("/login", (c) =>
   c.html(html`
@@ -41,9 +55,18 @@ app.notFound((c) =>
 
 const root = document.getElementById("app")!;
 
+// いま進行中の遷移
+let current: AbortController | undefined;
+
 // ② URL を Hono に渡して、返ってきた HTML を描画する
 async function render(url: string, init?: RequestInit) {
-  const res = await app.fetch(new Request(url, init));
+  // 新しい遷移が始まったら、古い遷移は止める（案 2）
+  current?.abort();
+  const controller = (current = new AbortController());
+  const { signal } = controller;
+
+  const res = await app.fetch(new Request(url, { ...init, signal }));
+  if (signal.aborted) return; // 待っている間に古くなったら書き込まない（案 1）
 
   // リダイレクト: Location 先に履歴を置き換えて、描画し直す
   const location = res.headers.get("Location");
@@ -53,7 +76,9 @@ async function render(url: string, init?: RequestInit) {
     return render(next);
   }
 
-  root.innerHTML = await res.text();
+  const body = await res.text();
+  if (signal.aborted) return;
+  root.innerHTML = body;
 }
 
 // ① <a> のクリックを横取りする → ③ pushState → ②
