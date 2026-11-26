@@ -12,7 +12,9 @@ Hono のアプリは `app.fetch(request)` を呼ぶと `Response` を返しま�
 
 ```tsx
 import { Hono } from "hono";
-import { jsxRenderer, layout, startRouter } from "./router";
+import type { Child } from "hono/jsx";
+import { createRouter } from "./router";
+import { jsxRenderer, layout, mountRouter } from "./jsx-adapter";
 
 const app = new Hono();
 
@@ -39,7 +41,8 @@ app.post("/login", (c) => {
   return c.redirect("/admin");
 });
 
-startRouter(app, document.getElementById("app")!);
+const router = createRouter<Child>(app);
+mountRouter(router, document.getElementById("app")!);
 ```
 
 ## React Router との対応
@@ -57,12 +60,15 @@ startRouter(app, document.getElementById("app")!);
 
 ## 仕組み
 
-ルーターの本体は `src/router.tsx`（約 100 行）です。「どの URL で何を出すか」は Hono が決め、`router.tsx` はブラウザと Hono の間をつなぎます。
+「どの URL で何を出すか」は Hono が決めます。ルーターは、ルーティングと描画の 2 つに分かれています。
+
+- `src/router.ts`（ルーティング）：ブラウザと Hono の間をつなぎ、遷移が終わるたびにハンドラが置いた view を `subscribe` 先に知らせる。画面のことは知らない
+- `src/jsx-adapter.tsx`（描画）：`router.subscribe` で受け取った view を `hono/jsx/dom` で描画する。`c.render()` を使えるようにする middleware もここにある
 
 1. `<a>` のクリックとフォーム送信を横取りし、`history.pushState` で URL を更新する
 2. URL から `Request` を作り、`app.fetch` に渡す
 3. `Response` が 3xx なら `Location` 先へ `history.replaceState` し、もう一度 2 から実行する
-4. ハンドラが `c.render()` に渡した JSX を、`hono/jsx/dom` で差分描画する
+4. ハンドラが `c.render()` に渡した JSX を adapter に知らせ、`hono/jsx/dom` で差分描画する
 5. `popstate`（戻る・進む）では URL を積まずに 2 から実行する
 
 新しい遷移が始まると、`AbortController` で前の遷移を中断します。これにより、遅れて届いた古いデータで画面が上書きされることはありません。
@@ -75,7 +81,8 @@ startRouter(app, document.getElementById("app")!);
 
 ```
 src/
-  router.tsx        ルーター本体
+  router.ts         ルーティング（画面のことは知らない）
+  jsx-adapter.tsx   hono/jsx での描画と c.render()
   routes.tsx        ルート定義（サンプルアプリ）
   components/       サンプルアプリのコンポーネント
   main.tsx          ルート定義とルーターをつなぐ

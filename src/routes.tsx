@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { UsersLayout } from "./components/users-layout";
-import { jsxRenderer, layout } from "./router";
+import { jsxRenderer, layout } from "./jsx-adapter";
 
 export const app = new Hono();
 

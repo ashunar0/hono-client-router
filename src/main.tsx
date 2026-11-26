@@ -1,4 +1,7 @@
+import type { Child } from "hono/jsx";
+import { mountRouter } from "./jsx-adapter";
+import { createRouter } from "./router";
 import { app } from "./routes";
-import { startRouter } from "./router";
 
-startRouter(app, document.getElementById("app")!);
+const router = createRouter<Child>(app);
+mountRouter(router, document.getElementById("app")!);
