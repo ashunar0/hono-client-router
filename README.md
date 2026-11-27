@@ -54,6 +54,12 @@ const guard: MiddlewareHandler = async (c, next) => {
 export default guard;
 ```
 
+リンクは `href()` で作ると、パスと params に型が付きます。存在しないパスや足りない params は型エラーになります。
+
+```tsx
+<a href={href("/users/:id", { id: "1" })}>ユーザー1</a>
+```
+
 `plugins/routes.ts`（Vite プラグイン）が `src/routes/` を読んで、Hono の app を組み立てる `src/routes.gen.ts` を書き出します。dev の間は、ファイルを足したり消したりすると書き直します。`routes.gen.ts` はコミットしません。
 
 ## React Router との対応
@@ -115,6 +121,6 @@ pnpm dev
 ## 未対応のこと
 
 - 読み込み中に、新しいレイアウトを先に出すこと（今は前の画面を出したまま `useNavigating()` で「読み込み中」を出すだけ）
-- 型安全なリンク
+- `c.redirect()` とフォームの `action` の型チェック（`href()` を通せば付くが、今は文字列のまま）
 - スクロール位置をリロードのあとも残すこと（今はメモリに覚えているだけ）
 - `#section` のようなハッシュへのリンク

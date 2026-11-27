@@ -8,6 +8,32 @@ export function putView(req: Request, view: unknown) {
   views.set(req, view);
 }
 
+// routes.gen.ts が declare module で routes を書き足す（ルートのパスの一覧）
+export interface Register {}
+export type RoutePath = Register extends { routes: infer R extends string } ? R : string;
+
+// "/users/:id" → { id: string }。catch-all の ":path{.+}" も path になる
+type ParamsOf<P extends string> = P extends `${string}:${infer Name}/${infer Rest}`
+  ? { [K in StripPattern<Name>]: string } & ParamsOf<`/${Rest}`>
+  : P extends `${string}:${infer Name}`
+    ? { [K in StripPattern<Name>]: string }
+    : {};
+type StripPattern<Name extends string> = Name extends `${infer N}{${string}}` ? N : Name;
+
+// ルートのパスと params から URL を作る。存在しないパスや、足りない params は型エラーになる
+// P を RoutePath で縛らないのは、一覧にないパスのとき「引数の数が違う」ではなく
+// 「そのパスは一覧にない」というエラーにするため
+export function href<P extends string>(
+  path: P extends RoutePath ? P : RoutePath,
+  ...[params]: P extends RoutePath ? (keyof ParamsOf<P> extends never ? [] : [ParamsOf<P>]) : [params?: unknown]
+): string {
+  return path.replace(/:(\w+)(\{[^}]*\})?/g, (_, name: string) => {
+    const value = (params as Record<string, string>)[name];
+    // catch-all（{.+}）の値は a/b/c のようにスラッシュを含むので、段ごとにエンコードする
+    return value.split("/").map(encodeURIComponent).join("/");
+  });
+}
+
 export type RouterState<View> = {
   view: View | null; // いま出している画面
   navigating: boolean; // 遷移の途中か（Hono の答えを待っている間は true）

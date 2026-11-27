@@ -121,6 +121,13 @@ export function generate(src: string) {
     ...pages.map((p) => `page(app, "${p.path}", ${p.module}, [${chainOf(p.dir).join(", ")}]);`),
     ...(notFound ? [`app.all("*", ${[...chainOf(""), notFound].join(", ")});`] : []),
     "",
+    "// ルートのパスの一覧を router.ts に教える。href() の型に使う",
+    'declare module "./router" {',
+    "  interface Register {",
+    `    routes: ${pages.length > 0 ? [...new Set(pages.map((p) => JSON.stringify(p.path)))].join(" | ") : "never"};`,
+    "  }",
+    "}",
+    "",
   ];
   return lines.join("\n");
 }

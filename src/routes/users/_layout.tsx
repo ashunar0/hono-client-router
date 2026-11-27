@@ -1,4 +1,5 @@
 import type { Child } from "hono/jsx";
+import { href } from "../../router";
 
 export default function UsersLayout({ children }: { children?: Child }) {
   return (
@@ -6,8 +7,8 @@ export default function UsersLayout({ children }: { children?: Child }) {
       <aside>
         <input placeholder="検索" />
         <ul>
-          <li><a href="/users/1">ユーザー1</a></li>
-          <li><a href="/users/2">ユーザー2</a></li>
+          <li><a href={href("/users/:id", { id: "1" })}>ユーザー1</a></li>
+          <li><a href={href("/users/:id", { id: "2" })}>ユーザー2</a></li>
         </ul>
       </aside>
       <section>{children}</section>
