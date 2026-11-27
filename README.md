@@ -67,7 +67,7 @@ export default guard;
 
 `LoaderArgs<"/users/:id">` と書くと、`params.id` に型が付きます。`request.signal` は、次の遷移が始まると abort されます。
 
-レイアウトとページの loader は、同時に呼ばれます。/users/1 → /users/2 のように同じレイアウトのまま移るときは、レイアウトの loader は呼び直さずにデータを使い回します（action のあとは呼び直します）。
+レイアウトとページの loader は、同時に呼ばれます。/users/1 → /users/2 のように同じレイアウトのまま移るときは、レイアウトの loader は呼び直さずにデータを使い回します（action のあとは呼び直します）。search params（`?page=2` など）は、loader が `request.url` から読みます。search params が変わったときは、全部の段の loader を呼び直します。
 
 loader が失敗すると、その段から外側に向かっていちばん近い `ErrorComponent` を、その段の場所に出します。それより外側のレイアウトはそのまま描きます。どの段にも `ErrorComponent` がなければ、決まった表示を画面全体に出します。
 
@@ -94,6 +94,7 @@ loader が失敗すると、その段から外側に向かっていちばん近�
 | レイアウト | `_layout.tsx` | `<Outlet />` |
 | loader のエラー | `ErrorComponent` | `ErrorBoundary` |
 | 404 | `_404.tsx` | `errorElement` |
+| search params | `new URL(request.url).searchParams` | 同じ |
 | 遷移の中断 | `request.signal` | `request.signal` |
 | 遷移中かどうか | `useNavigating()` | `useNavigation().state` |
 | 先読み | リンクにマウスを乗せると自動 | `<Link prefetch="intent">` |

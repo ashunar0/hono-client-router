@@ -101,6 +101,7 @@ export type SegmentState = {
 export type RouterState = {
   matches: SegmentState[]; // いま出しているルートの段。外側から順
   params: Record<string, string>;
+  search: string; // URL の ? から後ろ。"?page=2" など
   navigating: boolean; // 遷移の途中か
 };
 
@@ -112,7 +113,7 @@ export type Router = {
 // ルーティングだけを担当する。画面に何をどう描くかは知らない
 export function createRouter(app: Hono): Router {
   const listeners = new Set<(state: RouterState) => void>();
-  let state: RouterState = { matches: [], params: {}, navigating: false };
+  let state: RouterState = { matches: [], params: {}, search: "", navigating: false };
   let started = false;
 
   function publish(next: Partial<RouterState>) {
@@ -155,11 +156,12 @@ export function createRouter(app: Hono): Router {
     return loading;
   }
 
-  // 前の画面の段のデータを、そのまま使い回せるか。同じ段で、その段の params も同じならよい
-  const reusable = (segment: Segment, params: Record<string, string>) => {
+  // 前の画面の段のデータを、そのまま使い回せるか。同じ段で、その段の params も同じで、
+  // search params も同じならよい。search params が変わったら、どの段の loader も読むかもしれないので全部呼び直す
+  const reusable = (segment: Segment, params: Record<string, string>, search: string) => {
     const prev = state.matches.find((m) => m.segment === segment);
     const sameParams = segment.paramNames.every((name) => state.params[name] === params[name]);
-    return prev?.status === "success" && sameParams ? prev : undefined;
+    return prev?.status === "success" && sameParams && state.search === search ? prev : undefined;
   };
 
   // preload した loader の呼び出しを、URL ごとに取っておく。30 秒たったら使わない
@@ -182,7 +184,7 @@ export function createRouter(app: Hono): Router {
       const entry = { at: Date.now(), loads: new Map<Segment, Loading>() };
       for (const segment of match.route.segments) {
         // loader がない段と、遷移しても使い回される段は、取りに行かない
-        if (!segment.loader || reusable(segment, match.params)) continue;
+        if (!segment.loader || reusable(segment, match.params, new URL(url).search)) continue;
         const loading = startLoad(segment, match.params, req);
         // 失敗した preload は取っておかない。クリックしたときに取り直す
         loading.promise.catch(() => preloads.get(url) === entry && preloads.delete(url));
@@ -225,10 +227,11 @@ export function createRouter(app: Hono): Router {
       // action がリダイレクトしなかったときは、同じ URL を GET で読み直す
       if (req.method === "POST") return navigate(url, undefined, scrollTop, true);
       // どのルートにも当たらず、_404 もないとき
-      return publish({ matches: [], params: {}, navigating: false });
+      return publish({ matches: [], params: {}, search: "", navigating: false });
     }
 
     const { route, params } = match;
+    const search = new URL(url).search;
 
     // action のあとは、preload したものも含めて全部取り直す
     if (afterAction) preloads.clear();
@@ -241,7 +244,7 @@ export function createRouter(app: Hono): Router {
     // 3. どちらでもなければ、loader を呼ぶ
     const loadings: (Loading | undefined)[] = [];
     let next = route.segments.map((segment, i): SegmentState => {
-      const prev = afterAction ? undefined : reusable(segment, params);
+      const prev = afterAction ? undefined : reusable(segment, params, search);
       if (prev) return prev;
       if (!segment.loader) return { segment, status: "success", data: undefined, error: undefined };
 
@@ -258,7 +261,7 @@ export function createRouter(app: Hono): Router {
       return !first || first.status === "error" || Boolean(first.segment.Pending);
     };
     const show = () => {
-      if (showable(next)) publish({ matches: next, params, navigating: next.some((m) => m.status === "pending") });
+      if (showable(next)) publish({ matches: next, params, search, navigating: next.some((m) => m.status === "pending") });
     };
     show();
 
