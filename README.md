@@ -68,6 +68,7 @@ export default guard;
 | レイアウト | `_layout.tsx` | `<Outlet />` |
 | 404 | `_404.tsx` | `errorElement` |
 | 遷移の中断 | `c.req.raw.signal` | `request.signal` |
+| 遷移中かどうか | `useNavigating()` | `useNavigation().state` |
 
 ## 仕組み
 
@@ -111,6 +112,6 @@ pnpm dev
 
 ## 未対応のこと
 
-- 読み込み中の表示（pending UI）
+- 読み込み中に、新しいレイアウトを先に出すこと（今は前の画面を出したまま `useNavigating()` で「読み込み中」を出すだけ）
 - 型安全なリンク
 - スクロール位置の復元

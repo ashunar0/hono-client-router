@@ -8,19 +8,24 @@ export function putView(req: Request, view: unknown) {
   views.set(req, view);
 }
 
+export type RouterState<View> = {
+  view: View | null; // いま出している画面
+  navigating: boolean; // 遷移の途中か（Hono の答えを待っている間は true）
+};
+
 export type Router<View> = {
-  // 遷移が終わるたびに view を受け取る。登録した時点で最新の view があれば、すぐに 1 回呼ぶ
-  subscribe(listener: (view: View | null) => void): () => void;
+  // 状態が変わるたびに受け取る。登録した時点で状態があれば、すぐに 1 回呼ぶ
+  subscribe(listener: (state: RouterState<View>) => void): () => void;
 };
 
 // ルーティングだけを担当する。画面に何をどう描くかは知らない
 export function createRouter<View>(app: Hono): Router<View> {
-  const listeners = new Set<(view: View | null) => void>();
-  let latest: { view: View | null } | undefined;
+  const listeners = new Set<(state: RouterState<View>) => void>();
+  let state: RouterState<View> | undefined;
 
-  function publish(view: View | null) {
-    latest = { view };
-    for (const listener of listeners) listener(view);
+  function publish(next: RouterState<View>) {
+    state = next;
+    for (const listener of listeners) listener(next);
   }
 
   // いま進行中の遷移
@@ -32,6 +37,9 @@ export function createRouter<View>(app: Hono): Router<View> {
     current?.abort();
     const controller = (current = new AbortController());
     const { signal } = controller;
+
+    // 前の画面は出したまま、遷移中であることだけを知らせる
+    if (!state?.navigating) publish({ view: state?.view ?? null, navigating: true });
 
     const req = new Request(url, { ...init, signal });
     const res = await app.fetch(req);
@@ -45,7 +53,7 @@ export function createRouter<View>(app: Hono): Router<View> {
       return navigate(next);
     }
 
-    publish((views.get(req) as View | undefined) ?? null);
+    publish({ view: (views.get(req) as View | undefined) ?? null, navigating: false });
   }
 
   // ① <a> のクリックを横取りする → ③ pushState → ②
@@ -80,7 +88,7 @@ export function createRouter<View>(app: Hono): Router<View> {
   return {
     subscribe(listener) {
       listeners.add(listener);
-      if (latest) listener(latest.view);
+      if (state) listener(state);
       return () => listeners.delete(listener);
     },
   };

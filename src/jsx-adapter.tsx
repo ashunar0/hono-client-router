@@ -1,8 +1,8 @@
 // hono/jsx で描画するための adapter。ルーティングは router.ts に任せる
 import type { MiddlewareHandler } from "hono";
 import type { Child, FC } from "hono/jsx";
-import { render, useState } from "hono/jsx/dom";
-import { putView, type Router } from "./router";
+import { createContext, render, useContext, useState } from "hono/jsx/dom";
+import { putView, type Router, type RouterState } from "./router";
 
 declare module "hono" {
   // c.render() に JSX を渡せるようにする
@@ -36,16 +36,21 @@ export function layout(Layout: FC<{ children?: Child }>): MiddlewareHandler {
   };
 }
 
-// router の view を root に描画する
+const NavigatingContext = createContext(false);
+
+// 遷移の途中なら true。コンポーネントの中で読む
+export const useNavigating = () => useContext(NavigatingContext);
+
+// router の状態を root に描画する
 export function mountRouter(router: Router<Child>, root: HTMLElement) {
   // 画面全体。state を更新すると、hono/jsx/dom が差分だけ書き換える
-  let setView: (view: Child) => void = () => {};
+  let setState: (state: RouterState<Child>) => void = () => {};
   function App() {
-    const [view, set] = useState<Child>(null);
-    setView = set;
-    return <>{view}</>;
+    const [state, set] = useState<RouterState<Child>>({ view: null, navigating: false });
+    setState = set;
+    return <NavigatingContext.Provider value={state.navigating}>{state.view}</NavigatingContext.Provider>;
   }
   render(<App />, root);
 
-  router.subscribe((view) => setView(view));
+  router.subscribe((state) => setState(state));
 }
