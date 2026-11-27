@@ -1,6 +1,6 @@
 import type { Child } from "hono/jsx";
 
-export function UsersLayout({ children }: { children?: Child }) {
+export default function UsersLayout({ children }: { children?: Child }) {
   return (
     <div style={{ display: "flex", gap: "24px" }}>
       <aside>

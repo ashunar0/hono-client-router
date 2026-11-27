@@ -1,33 +1,37 @@
 // hono/jsx で描画するための adapter。ルーティングは router.ts に任せる
-import type { Context, MiddlewareHandler } from "hono";
+import type { MiddlewareHandler } from "hono";
 import type { Child, FC } from "hono/jsx";
 import { render, useState } from "hono/jsx/dom";
 import { putView, type Router } from "./router";
 
-// c.render() に JSX を渡せるようにする
 declare module "hono" {
+  // c.render() に JSX を渡せるようにする
   interface ContextRenderer {
     (content: Child): Response | Promise<Response>;
   }
-}
-
-function show(c: Context, view: Child) {
-  putView(c.req.raw, view);
-  return c.body(null);
+  // ここまでに通ったレイアウトで包む関数
+  interface ContextVariableMap {
+    wrap: (content: Child) => Child;
+  }
 }
 
 // 全ルートで c.render(<JSX />) を使えるようにする middleware
 export function jsxRenderer(): MiddlewareHandler {
   return async (c, next) => {
-    c.setRenderer((content) => show(c, content));
+    c.setRenderer((content) => {
+      const wrap = c.get("wrap") ?? ((content: Child) => content);
+      putView(c.req.raw, wrap(content));
+      return c.body(null);
+    });
     await next();
   };
 }
 
-// c.render() の中身を Layout で包む middleware
+// c.render() の中身を Layout で包む middleware。重ねると、先に通ったものが外側になる
 export function layout(Layout: FC<{ children?: Child }>): MiddlewareHandler {
   return async (c, next) => {
-    c.setRenderer((content) => show(c, <Layout>{content}</Layout>));
+    const outer = c.get("wrap") ?? ((content: Child) => content);
+    c.set("wrap", (content) => outer(<Layout>{content}</Layout>));
     await next();
   };
 }

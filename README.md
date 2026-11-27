@@ -8,54 +8,65 @@ Hono のアプリは `app.fetch(request)` を呼ぶと `Response` を返しま�
 
 ## 書き方
 
-ルートの定義は、普通の Hono アプリとほぼ同じです。
+`src/routes/` のディレクトリが URL になります。決まりは [hono-kit](https://github.com/ashunar0/hono-kit) に揃えています。
+
+```
+src/routes/
+  index.tsx              GET /
+  login/index.tsx        GET /login と POST /login
+  users/
+    _layout.tsx          /users 配下のレイアウト
+    index.tsx            GET /users
+    [id]/index.tsx       GET /users/:id
+  admin/
+    _middleware.ts       /admin 配下のガード
+    index.tsx            GET /admin
+  _404.tsx               どれにも当たらないとき
+```
+
+| ファイル | 中身 |
+|---|---|
+| `index.tsx` | メソッド名（`GET` / `POST` / `PUT` / `PATCH` / `DELETE`）で Hono のハンドラを export する |
+| `_layout.tsx` | レイアウトのコンポーネントを default export する。外側のディレクトリのレイアウトほど外側に包む |
+| `_middleware.ts` | Hono の middleware を default export する。そのディレクトリ配下のすべてのルートで動く |
+| `_404.tsx` | `src/routes/` の直下にだけ置ける。どのルートにも当たらないときのハンドラを default export する |
+
+ディレクトリ名の `[id]` は `:id`、`[...path]` は残りのパス全部になります。`(名前)` は URL に出ないグループです。
 
 ```tsx
-import { Hono } from "hono";
-import type { Child } from "hono/jsx";
-import { createRouter } from "./router";
-import { jsxRenderer, layout, mountRouter } from "./jsx-adapter";
-
-const app = new Hono();
-
-app.use("*", jsxRenderer());
-
-// レイアウト
-app.use("/users/*", layout(UsersLayout));
-
-// データ取得（loader）
-app.get("/users/:id", async (c) => {
-  const user = await fetchUser(c.req.param("id"), c.req.raw.signal);
+// src/routes/users/[id]/index.tsx（データ取得 = loader）
+export const GET = async (c: Context) => {
+  const user = await fetchUser(c.req.param("id")!, c.req.raw.signal);
   return c.render(<h1>{user.name}</h1>);
-});
+};
 
-// ガード
-app.use("/admin/*", async (c, next) => {
-  if (!loggedIn) return c.redirect("/login");
-  await next();
-});
-
-// フォーム送信（action）
-app.post("/login", (c) => {
-  loggedIn = true;
+// src/routes/login/index.tsx（フォーム送信 = action）
+export const POST = (c: Context) => {
+  logIn();
   return c.redirect("/admin");
-});
+};
 
-const router = createRouter<Child>(app);
-mountRouter(router, document.getElementById("app")!);
+// src/routes/admin/_middleware.ts（ガード）
+const guard: MiddlewareHandler = async (c, next) => {
+  if (!isLoggedIn()) return c.redirect("/login");
+  await next();
+};
+export default guard;
 ```
+
+`plugins/routes.ts`（Vite プラグイン）が `src/routes/` を読んで、Hono の app を組み立てる `src/routes.gen.ts` を書き出します。dev の間は、ファイルを足したり消したりすると書き直します。`routes.gen.ts` はコミットしません。
 
 ## React Router との対応
 
 | やりたいこと | このルーター | React Router |
 |---|---|---|
-| ルートの定義 | `app.get("/users/:id", ...)` | `{ path: "/users/:id" }` |
+| ルートの定義 | `src/routes/users/[id]/index.tsx` | `{ path: "/users/:id" }` |
 | データ取得 | async ハンドラ | `loader` |
-| フォーム送信 | `app.post(...)` | `action` |
+| フォーム送信 | `export const POST` | `action` |
 | リダイレクト | `c.redirect()` | `redirect()` |
-| ガード | middleware | 親ルートの `loader` / middleware |
-| レイアウト | `layout()` middleware | `<Outlet />` |
-| 404 | `app.notFound()` | `errorElement` |
+| ガード | `_middleware.ts` | 親ルートの `loader` / middleware |
+| レイアウト | `_layout.tsx` | `<Outlet />` |
+| 404 | `_404.tsx` | `errorElement` |
 | 遷移の中断 | `c.req.raw.signal` | `request.signal` |
 
 ## 仕組み
@@ -83,9 +94,12 @@ mountRouter(router, document.getElementById("app")!);
 src/
   router.ts         ルーティング（画面のことは知らない）
   jsx-adapter.tsx   hono/jsx での描画と c.render()
-  routes.tsx        ルート定義（サンプルアプリ）
-  components/       サンプルアプリのコンポーネント
+  routes/           ルート定義（サンプルアプリ）
+  routes.gen.ts     plugins/routes.ts が書き出す。コミットしない
+  lib/              サンプルアプリのログイン状態とデータ取得
   main.tsx          ルート定義とルーターをつなぐ
+plugins/
+  routes.ts         src/routes から routes.gen.ts を書き出す
 ```
 
 ## 動かし方
@@ -97,7 +111,6 @@ pnpm dev
 
 ## 未対応のこと
 
-- レイアウトは 1 段のみ（`layout()` を重ねると内側で上書きされる）
 - 読み込み中の表示（pending UI）
 - 型安全なリンク
 - スクロール位置の復元
