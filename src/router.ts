@@ -28,11 +28,28 @@ export function createRouter<View>(app: Hono): Router<View> {
     for (const listener of listeners) listener(next);
   }
 
+  // スクロール位置の復元はブラウザに任せない。ブラウザは popstate の直後に戻そうとするが、
+  // その時点ではまだ新しい画面を描いていないので、位置がずれる
+  history.scrollRestoration = "manual";
+
+  // 履歴の項目ごとに key を付けて、離れるときのスクロール位置を覚えておく
+  const positions = new Map<string, number>();
+  const newKey = () => crypto.randomUUID();
+  let currentKey: string = history.state?.key ?? newKey();
+  history.replaceState({ key: currentKey }, "");
+
+  // 新しい履歴の項目に移る。今の項目の位置を覚えてから積む
+  function push(url: string) {
+    positions.set(currentKey, scrollY);
+    currentKey = newKey();
+    history.pushState({ key: currentKey }, "", url);
+  }
+
   // いま進行中の遷移
   let current: AbortController | undefined;
 
-  // ② URL を Hono に渡して、ハンドラが置いた view を知らせる
-  async function navigate(url: string, init?: RequestInit) {
+  // ② URL を Hono に渡して、ハンドラが置いた view を知らせる。描いたら scrollTop の位置にスクロールする
+  async function navigate(url: string, init?: RequestInit, scrollTop = 0) {
     // 新しい遷移が始まったら、古い遷移は止める
     current?.abort();
     const controller = (current = new AbortController());
@@ -49,11 +66,13 @@ export function createRouter<View>(app: Hono): Router<View> {
     const location = res.headers.get("Location");
     if (res.status >= 300 && res.status < 400 && location) {
       const next = new URL(location, url).href;
-      history.replaceState(null, "", next);
+      history.replaceState({ key: currentKey }, "", next);
       return navigate(next);
     }
 
     publish({ view: (views.get(req) as View | undefined) ?? null, navigating: false });
+    // 描画が DOM に反映されるのを待ってからスクロールする
+    requestAnimationFrame(() => scrollTo(0, scrollTop));
   }
 
   // ① <a> のクリックを横取りする → ③ pushState → ②
@@ -65,7 +84,7 @@ export function createRouter<View>(app: Hono): Router<View> {
     if (!a || a.origin !== location.origin) return;
 
     e.preventDefault();
-    history.pushState(null, "", a.href);
+    push(a.href);
     navigate(a.href);
   });
 
@@ -75,15 +94,20 @@ export function createRouter<View>(app: Hono): Router<View> {
     if (form.method !== "post" || new URL(form.action).origin !== location.origin) return;
 
     e.preventDefault();
-    history.pushState(null, "", form.action);
+    push(form.action);
     navigate(form.action, { method: "POST", body: new FormData(form) });
   });
 
-  // ④ 戻る・進む → ②（pushState はしない）
-  window.addEventListener("popstate", () => navigate(location.href));
+  // ④ 戻る・進む → ②（pushState はしない）。その項目を離れたときの位置に戻す
+  window.addEventListener("popstate", (e) => {
+    // この時点で URL はもう変わっているが、スクロールはまだ前の項目のまま
+    positions.set(currentKey, scrollY);
+    currentKey = e.state?.key ?? newKey();
+    navigate(location.href, undefined, positions.get(currentKey) ?? 0);
+  });
 
   // 最初の表示
-  navigate(location.href);
+  navigate(location.href, undefined, scrollY);
 
   return {
     subscribe(listener) {
