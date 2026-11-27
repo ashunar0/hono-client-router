@@ -141,6 +141,59 @@ export function createRouter(app: Hono): Router {
   // いま進行中の遷移
   let current: AbortController | undefined;
 
+  // ---- loader の呼び出しと preload ----
+
+  // loader 1 回ぶんの呼び出し。終わったら結果が settled に入る（終わっていれば、待たずに使える）
+  type Loading = { promise: Promise<unknown>; settled?: { ok: true; data: unknown } | { ok: false; error: unknown } };
+
+  function startLoad(segment: Segment, params: Record<string, string>, request: Request): Loading {
+    const loading: Loading = { promise: Promise.resolve().then(() => segment.loader?.({ params, request })) };
+    loading.promise.then(
+      (data) => (loading.settled = { ok: true, data }),
+      (error) => (loading.settled = { ok: false, error }),
+    );
+    return loading;
+  }
+
+  // 前の画面の段のデータを、そのまま使い回せるか。同じ段で、その段の params も同じならよい
+  const reusable = (segment: Segment, params: Record<string, string>) => {
+    const prev = state.matches.find((m) => m.segment === segment);
+    const sameParams = segment.paramNames.every((name) => state.params[name] === params[name]);
+    return prev?.status === "success" && sameParams ? prev : undefined;
+  };
+
+  // preload した loader の呼び出しを、URL ごとに取っておく。30 秒たったら使わない
+  const PRELOAD_FRESH_MS = 30_000;
+  const preloads = new Map<string, { at: number; loads: Map<Segment, Loading> }>();
+  const preloading = new Set<string>();
+
+  // その URL の loader を先に呼んでおく。リンクにマウスを乗せたときに使う
+  async function preload(url: string) {
+    const hit = preloads.get(url);
+    if ((hit && Date.now() - hit.at < PRELOAD_FRESH_MS) || preloading.has(url)) return;
+    preloading.add(url);
+    try {
+      // ガードも通す。リダイレクトになるなら、何も取っておかない
+      const req = new Request(url);
+      const res = await app.fetch(req);
+      const match = matches.get(req);
+      if ((res.status >= 300 && res.status < 400) || !match) return;
+
+      const entry = { at: Date.now(), loads: new Map<Segment, Loading>() };
+      for (const segment of match.route.segments) {
+        // loader がない段と、遷移しても使い回される段は、取りに行かない
+        if (!segment.loader || reusable(segment, match.params)) continue;
+        const loading = startLoad(segment, match.params, req);
+        // 失敗した preload は取っておかない。クリックしたときに取り直す
+        loading.promise.catch(() => preloads.get(url) === entry && preloads.delete(url));
+        entry.loads.set(segment, loading);
+      }
+      preloads.set(url, entry);
+    } finally {
+      preloading.delete(url);
+    }
+  }
+
   // ② Hono にどのルートかを聞いて、loader を呼び、結果を知らせる。描いたら scrollTop の位置にスクロールする。
   // revalidate が true なら、レイアウトのデータも使い回さずに取り直す（action のあと）
   async function navigate(url: string, init?: RequestInit, scrollTop = 0, revalidate = false) {
@@ -177,12 +230,25 @@ export function createRouter(app: Hono): Router {
 
     const { route, params } = match;
 
-    // 段ごとの状態を作る。前の画面と同じ段で、その段の params も同じなら、データを使い回す
-    let next = route.segments.map((segment): SegmentState => {
-      const prev = state.matches.find((m) => m.segment === segment);
-      const sameParams = segment.paramNames.every((name) => state.params[name] === params[name]);
-      if (!afterAction && prev?.status === "success" && sameParams) return prev;
-      return { segment, status: segment.loader ? "pending" : "success", data: undefined, error: undefined };
+    // action のあとは、preload したものも含めて全部取り直す
+    if (afterAction) preloads.clear();
+    const hit = preloads.get(url);
+    const preloaded = !afterAction && hit && Date.now() - hit.at < PRELOAD_FRESH_MS ? hit : undefined;
+
+    // 段ごとの状態を作る。
+    // 1. 前の画面と同じ段で、その段の params も同じなら、データを使い回す
+    // 2. preload してあれば、その呼び出しを使う。もう届いていれば、待たずに success にする
+    // 3. どちらでもなければ、loader を呼ぶ
+    const loadings: (Loading | undefined)[] = [];
+    let next = route.segments.map((segment, i): SegmentState => {
+      const prev = afterAction ? undefined : reusable(segment, params);
+      if (prev) return prev;
+      if (!segment.loader) return { segment, status: "success", data: undefined, error: undefined };
+
+      const loading = preloaded?.loads.get(segment) ?? startLoad(segment, params, req);
+      loadings[i] = loading;
+      if (loading.settled?.ok) return { segment, status: "success", data: loading.settled.data, error: undefined };
+      return { segment, status: "pending", data: undefined, error: undefined };
     });
 
     // 新しい画面に切り替えてよいか。外側から見て最初の未完了の段が Pending を持っていれば、それを出せる。
@@ -196,14 +262,14 @@ export function createRouter(app: Hono): Router {
     };
     show();
 
-    // loader を全部同時に呼ぶ。届いたものから順に知らせる。
-    // loader にも同じ request を渡すので、request.signal で中断に気づける
+    // loader は全部同時に呼んである。届いたものから順に知らせる。
+    // loader には同じ request を渡しているので、request.signal で中断に気づける
     await Promise.all(
       next.map(async (m, i) => {
         if (m.status !== "pending") return;
         let result: Partial<SegmentState>;
         try {
-          result = { status: "success", data: await m.segment.loader?.({ params, request: req }) };
+          result = { status: "success", data: await loadings[i]?.promise };
         } catch (error) {
           result = { status: "error", error };
         }
@@ -229,6 +295,26 @@ export function createRouter(app: Hono): Router {
     e.preventDefault();
     push(a.href);
     navigate(a.href);
+  });
+
+  // リンクにマウスを乗せて 50ms たったら（またはフォーカスしたら）、preload する
+  const linkOf = (target: EventTarget | null) => {
+    const a = (target as Element | null)?.closest?.("a");
+    return a && a.origin === location.origin && a.href !== location.href ? a : null;
+  };
+  let preloadTimer: ReturnType<typeof setTimeout> | undefined;
+  document.addEventListener("mouseover", (e) => {
+    const a = linkOf(e.target);
+    if (!a) return;
+    clearTimeout(preloadTimer);
+    preloadTimer = setTimeout(() => preload(a.href), 50);
+  });
+  document.addEventListener("mouseout", (e) => {
+    if (linkOf(e.target)) clearTimeout(preloadTimer);
+  });
+  document.addEventListener("focusin", (e) => {
+    const a = linkOf(e.target);
+    if (a) preload(a.href);
   });
 
   // フォーム送信も横取りする → ③ pushState → ②（POST で）
