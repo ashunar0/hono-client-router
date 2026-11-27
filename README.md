@@ -28,7 +28,7 @@ src/routes/
 | ファイル | 中身 |
 |---|---|
 | `index.tsx` | 画面のコンポーネントを default export する。必要なら `loader`（データ取得）、`Pending`（待っている間の表示）、`action`（フォーム送信）を名前付きで export する |
-| `_layout.tsx` | レイアウトのコンポーネントを default export する。外側のディレクトリのレイアウトほど外側に包む |
+| `_layout.tsx` | レイアウトのコンポーネントを default export する。ページと同じように `loader` と `Pending` も export できる。外側のディレクトリのレイアウトほど外側に包む |
 | `_middleware.ts` | Hono の middleware を default export する。そのディレクトリ配下のすべてのルートで動く |
 | `_404.tsx` | `src/routes/` の直下にだけ置ける。どのルートにも当たらないときのコンポーネントを default export する |
 
@@ -62,6 +62,8 @@ export default guard;
 ```
 
 `LoaderArgs<"/users/:id">` と書くと、`params.id` に型が付きます。`request.signal` は、次の遷移が始まると abort されます。
+
+レイアウトとページの loader は、同時に呼ばれます。/users/1 → /users/2 のように同じレイアウトのまま移るときは、レイアウトの loader は呼び直さずにデータを使い回します（action のあとは呼び直します）。
 
 リンクは `href()` で作ると、パスと params に型が付きます。存在しないパスや足りない params は型エラーになります。
 
@@ -97,9 +99,10 @@ export default guard;
 1. `<a>` のクリックとフォーム送信を横取りし、`history.pushState` で URL を更新する
 2. URL から `Request` を作り、`app.fetch` に渡す。Hono は当たったルートと params を置いて、本文が空の `Response` を返す
 3. `Response` が 3xx なら `Location` 先へ `history.replaceState` し、もう一度 2 から実行する
-4. ルートに `Pending` があれば、新しいレイアウトと `Pending` を先に描く。なければ前の画面のまま、`useNavigating()` が true になる
-5. `loader` を呼んでデータを待ち、届いたら画面のコンポーネントに渡して描く
-6. `popstate`（戻る・進む）では URL を積まずに 2 から実行する
+4. 当たったルートを、外側から順の段（全体のレイアウト、/users のレイアウト、ページ）の並びにする
+5. 各段の `loader` を同時に呼ぶ。届いたものから、その段のコンポーネントに渡して描く。まだ届いていない段には、その段の `Pending` を描く
+6. 外側から見て最初の未完了の段に `Pending` がなければ、前の画面のまま待つ。その間は `useNavigating()` が true になる
+7. `popstate`（戻る・進む）では URL を積まずに 2 から実行する
 
 スクロール位置は、ブラウザの自動復元を止めて（`history.scrollRestoration = "manual"`）ルーターが戻します。`pushState` で履歴の項目ごとに key を付けて、その項目を離れるときの位置を覚えておきます。新しいページは一番上から、戻る・進むでは覚えておいた位置から表示します。
 
@@ -133,6 +136,5 @@ pnpm dev
 ## 未対応のこと
 
 - エラー時の表示をルートごとに決めること（今は adapter が決まった文言を出すだけ）
-- レイアウトの loader（レイアウトはデータを取れない）
 - スクロール位置をリロードのあとも残すこと（今はメモリに覚えているだけ）
 - `#section` のようなハッシュへのリンク

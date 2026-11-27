@@ -10,3 +10,18 @@ export function fetchUser(id: string, signal: AbortSignal) {
     });
   });
 }
+
+// ユーザー一覧を取ってくるふり（1 秒かかる）
+export function fetchUsers(signal: AbortSignal) {
+  return new Promise<{ id: string; name: string }[]>((resolve, reject) => {
+    const timer = setTimeout(
+      () => resolve(["1", "2", "3"].map((id) => ({ id, name: `ユーザー${id}` }))),
+      1000,
+    );
+    signal.addEventListener("abort", () => {
+      console.log("ユーザー一覧の取得を中断した");
+      clearTimeout(timer);
+      reject(signal.reason);
+    });
+  });
+}

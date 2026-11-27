@@ -1,29 +1,27 @@
 // hono/jsx で描画するための adapter。ルーティングは router.ts に任せる
 import type { Child, FC } from "hono/jsx";
 import { createContext, render, useContext, useState } from "hono/jsx/dom";
-import type { Router, RouterState } from "./router";
+import type { Router, RouterState, SegmentState } from "./router";
 
 const NavigatingContext = createContext(false);
 
 // 遷移の途中なら true。コンポーネントの中で読む
 export const useNavigating = () => useContext(NavigatingContext);
 
-type Layout = FC<{ children?: Child }>;
+type SegmentComponent = FC<{ data: unknown; children?: Child }>;
 
-// router の状態から、レイアウトの中に Pending / Component / エラーのどれかを描く
-function View({ state }: { state: RouterState }) {
-  if (!state.match) return null;
-  const { route } = state.match;
-  const Pending = route.Pending as FC | undefined;
-  const Component = route.Component as FC<{ data: unknown }> | undefined;
+// i 番目の段から内側を描く。外側の段のコンポーネントが、内側を children として包む。
+// まだデータが届いていない段では、その段の Pending を出して、それより内側は描かない
+function renderFrom(matches: SegmentState[], i: number): Child {
+  const m = matches[i];
+  if (!m) return null;
+  const Pending = m.segment.Pending as FC | undefined;
+  const Component = m.segment.Component as SegmentComponent | undefined;
 
-  let content: Child = null;
-  if (state.status === "pending" && Pending) content = <Pending />;
-  else if (state.status === "error") content = <p>エラーが発生しました：{String(state.error)}</p>;
-  else if (state.status === "success" && Component) content = <Component data={state.data} />;
-
-  // 内側のレイアウトから順に包む。外側のレイアウトほど外に来る
-  return (route.layouts as Layout[]).reduceRight<Child>((children, Layout) => <Layout>{children}</Layout>, content);
+  if (m.status === "pending") return Pending ? <Pending /> : null;
+  if (m.status === "error") return <p>エラーが発生しました：{String(m.error)}</p>;
+  if (!Component) return renderFrom(matches, i + 1);
+  return <Component data={m.data}>{renderFrom(matches, i + 1)}</Component>;
 }
 
 // router の状態を root に描画する
@@ -36,7 +34,7 @@ export function mountRouter(router: Router, root: HTMLElement) {
     if (!state) return null;
     return (
       <NavigatingContext.Provider value={state.navigating}>
-        <View state={state} />
+        {renderFrom(state.matches, 0)}
       </NavigatingContext.Provider>
     );
   }

@@ -18,31 +18,41 @@ type StripPattern<Name extends string> = Name extends `${infer N}{${string}}` ? 
 export type LoaderArgs<P extends string = string> = { params: ParamsOf<P>; request: Request };
 export type ActionArgs<P extends string = string> = LoaderArgs<P>;
 
-// ページのファイル（index.tsx）が export するもの。画面のコンポーネントは default export。
+// ページのファイル（index.tsx）とレイアウト（_layout.tsx）が export するもの。画面のコンポーネントは default export。
 // コンポーネントは adapter が描くので、ここでは中身を知らない
-export type PageModule = {
+export type RouteModule = {
   loader?(args: LoaderArgs): unknown;
   action?(args: ActionArgs): Response | Promise<Response>;
   Pending?: unknown;
   default?: unknown;
 };
 
-// ルーターが扱うルート。ページのファイルの中身に、外側から順のレイアウトを足したもの
-export type Route = {
+// ルートの 1 段。全体のレイアウト、/users のレイアウト、ページ、のように外側から並ぶ
+export type Segment = {
+  paramNames: string[]; // この段までの params の名前。変わらなければ、データを使い回せる
   loader?(args: LoaderArgs): unknown;
-  action?(args: ActionArgs): Response | Promise<Response>;
   Pending?: unknown;
   Component?: unknown;
-  layouts: unknown[];
 };
 
-// ページのファイルからルートを作る。routes.gen.ts が使う
-export const toRoute = (page: PageModule, layouts: unknown[]): Route => ({
-  loader: page.loader,
+// ファイルの中身から段を作る。routes.gen.ts が使う
+export const toSegment = (paramNames: string[], module: RouteModule): Segment => ({
+  paramNames,
+  loader: module.loader,
+  Pending: module.Pending,
+  Component: module.default,
+});
+
+// ルーターが扱うルート。外側から順の段と、フォーム送信の action
+export type Route = {
+  segments: Segment[];
+  action?(args: ActionArgs): Response | Promise<Response>;
+};
+
+// レイアウトの段と、ページのファイルからルートを作る。routes.gen.ts が使う
+export const toRoute = (layouts: Segment[], paramNames: string[], page: RouteModule): Route => ({
+  segments: [...layouts, toSegment(paramNames, page)],
   action: page.action,
-  Pending: page.Pending,
-  Component: page.default,
-  layouts,
 });
 
 // ---- リンクとリダイレクト ----
@@ -77,11 +87,17 @@ export function putMatch(req: Request, route: Route, params: Record<string, stri
 
 // ---- ルーター ----
 
-export type RouterState = {
-  match: Match | null; // いま出しているルート
-  status: "pending" | "success" | "error"; // loader の状態
+// 段ごとの状態
+export type SegmentState = {
+  segment: Segment;
+  status: "pending" | "success" | "error"; // loader の状態。loader がない段は最初から success
   data: unknown; // loader が返したもの
   error: unknown; // loader が投げたもの
+};
+
+export type RouterState = {
+  matches: SegmentState[]; // いま出しているルートの段。外側から順
+  params: Record<string, string>;
   navigating: boolean; // 遷移の途中か
 };
 
@@ -93,7 +109,7 @@ export type Router = {
 // ルーティングだけを担当する。画面に何をどう描くかは知らない
 export function createRouter(app: Hono): Router {
   const listeners = new Set<(state: RouterState) => void>();
-  let state: RouterState = { match: null, status: "pending", data: undefined, error: undefined, navigating: false };
+  let state: RouterState = { matches: [], params: {}, navigating: false };
   let started = false;
 
   function publish(next: Partial<RouterState>) {
@@ -122,8 +138,9 @@ export function createRouter(app: Hono): Router {
   // いま進行中の遷移
   let current: AbortController | undefined;
 
-  // ② Hono にどのルートかを聞いて、loader を呼び、結果を知らせる。描いたら scrollTop の位置にスクロールする
-  async function navigate(url: string, init?: RequestInit, scrollTop = 0) {
+  // ② Hono にどのルートかを聞いて、loader を呼び、結果を知らせる。描いたら scrollTop の位置にスクロールする。
+  // revalidate が true なら、レイアウトのデータも使い回さずに取り直す（action のあと）
+  async function navigate(url: string, init?: RequestInit, scrollTop = 0, revalidate = false) {
     // 新しい遷移が始まったら、古い遷移は止める
     current?.abort();
     const controller = (current = new AbortController());
@@ -137,36 +154,62 @@ export function createRouter(app: Hono): Router {
     const res = await app.fetch(req);
     if (signal.aborted) return; // 待っている間に古くなったら知らせない
 
+    const afterAction = revalidate || req.method === "POST";
+
     // リダイレクト: Location 先に履歴を置き換えて、遷移し直す
     const location = res.headers.get("Location");
     if (res.status >= 300 && res.status < 400 && location) {
       const next = new URL(location, url).href;
       history.replaceState({ key: currentKey }, "", next);
-      return navigate(next);
+      return navigate(next, undefined, 0, afterAction);
     }
 
     const match = matches.get(req);
     if (!match) {
       // action がリダイレクトしなかったときは、同じ URL を GET で読み直す
-      if (req.method === "POST") return navigate(url, undefined, scrollTop);
+      if (req.method === "POST") return navigate(url, undefined, scrollTop, true);
       // どのルートにも当たらず、_404 もないとき
-      return publish({ match: null, status: "success", data: undefined, error: undefined, navigating: false });
+      return publish({ matches: [], params: {}, navigating: false });
     }
 
     const { route, params } = match;
 
-    // Pending があるルートなら、データを待たずに、新しいレイアウトと Pending を先に出す
-    if (route.Pending) publish({ match, status: "pending", data: undefined, error: undefined });
+    // 段ごとの状態を作る。前の画面と同じ段で、その段の params も同じなら、データを使い回す
+    let next = route.segments.map((segment): SegmentState => {
+      const prev = state.matches.find((m) => m.segment === segment);
+      const sameParams = segment.paramNames.every((name) => state.params[name] === params[name]);
+      if (!afterAction && prev?.status === "success" && sameParams) return prev;
+      return { segment, status: segment.loader ? "pending" : "success", data: undefined, error: undefined };
+    });
 
-    // loader を呼ぶ。loader にも同じ request を渡すので、request.signal で中断に気づける
-    try {
-      const data = await route.loader?.({ params, request: req });
-      if (signal.aborted) return;
-      publish({ match, status: "success", data, error: undefined, navigating: false });
-    } catch (error) {
-      if (signal.aborted) return; // 中断で投げられたものはエラーではない
-      publish({ match, status: "error", data: undefined, error, navigating: false });
-    }
+    // 新しい画面に切り替えてよいか。外側から見て最初の未完了の段が Pending を持っていれば、それを出せる。
+    // 持っていなければ、前の画面のまま待つ
+    const showable = (ms: SegmentState[]) => {
+      const first = ms.find((m) => m.status !== "success");
+      return !first || first.status === "error" || Boolean(first.segment.Pending);
+    };
+    const show = () => {
+      if (showable(next)) publish({ matches: next, params, navigating: next.some((m) => m.status === "pending") });
+    };
+    show();
+
+    // loader を全部同時に呼ぶ。届いたものから順に知らせる。
+    // loader にも同じ request を渡すので、request.signal で中断に気づける
+    await Promise.all(
+      next.map(async (m, i) => {
+        if (m.status !== "pending") return;
+        let result: Partial<SegmentState>;
+        try {
+          result = { status: "success", data: await m.segment.loader?.({ params, request: req }) };
+        } catch (error) {
+          result = { status: "error", error };
+        }
+        if (signal.aborted) return; // 中断で投げられたものはエラーではない
+        next = next.map((n, j) => (j === i ? { ...n, ...result } : n));
+        show();
+      }),
+    );
+    if (signal.aborted) return;
 
     // 描画が DOM に反映されるのを待ってからスクロールする
     requestAnimationFrame(() => scrollTo(0, scrollTop));

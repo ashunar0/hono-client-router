@@ -2,6 +2,7 @@
  * src/routes のディレクトリから src/routes.gen.ts を書き出す。
  * ディレクトリの決まりは hono-kit に揃えている（ディレクトリが URL、1 ディレクトリに index.tsx が 1 つ）。
  * ページのファイルは、画面のコンポーネントを default export し、loader / Pending / action を名前付きで export する。
+ * レイアウト（_layout.tsx）も、コンポーネントを default export し、loader / Pending を名前付きで export できる。
  * hono-kit にない決まりとして、_layout.tsx（レイアウト）、_middleware.ts（ガードなど）、_404.tsx（どれにも当たらないとき）を読む。
  *
  * Vite からはプラグインとして、それ以外（tsc の前）は `node plugins/routes.ts` で使う
@@ -69,11 +70,16 @@ export function generate(src: string) {
   const importPath = (file: string) => `./${path.relative(src, file).split(path.sep).join("/").replace(/\.tsx?$/, "")}`;
 
   const imports: string[] = [];
-  // ディレクトリ → そのディレクトリの middleware / layout の名前
+  const segments: string[] = [];
+  // ディレクトリ → そのディレクトリの middleware / レイアウトの段の名前
   const middlewares = new Map<string, string>();
   const layouts = new Map<string, string>();
   const pages: { path: string; module: string; dir: string }[] = [];
   let notFound: string | undefined;
+
+  // その段の params の名前。/users/[id] の段なら ["id"]。レイアウトのデータを使い回せるかの判断に使う
+  const paramNamesOf = (dir: string) =>
+    JSON.stringify(dir.split("/").flatMap((s) => /^\[(?:\.\.\.)?(\w+)\]$/.exec(s)?.[1] ?? []));
 
   files.forEach((file, i) => {
     const name = path.basename(file);
@@ -85,15 +91,16 @@ export function generate(src: string) {
       imports.push(`import middleware${i} from "${importPath(file)}";`);
       middlewares.set(dir, `middleware${i}`);
     } else if (LAYOUT_NAMES.includes(name)) {
-      imports.push(`import Layout${i} from "${importPath(file)}";`);
-      layouts.set(dir, `Layout${i}`);
+      imports.push(`import * as layoutModule${i} from "${importPath(file)}";`);
+      segments.push(`const layout${i} = toSegment(${paramNamesOf(dir)}, layoutModule${i});`);
+      layouts.set(dir, `layout${i}`);
     } else if (NOT_FOUND_NAMES.includes(name) && dir === "") {
       imports.push(`import NotFound from "${importPath(file)}";`);
       notFound = "NotFound";
     }
   });
 
-  // そのディレクトリまでに通る middleware / layout。外側から順に
+  // そのディレクトリまでに通る middleware / レイアウト。外側から順に
   const pick = (map: Map<string, string>, dir: string) =>
     ancestorsOf(dir).flatMap((d) => (map.has(d) ? [map.get(d)!] : []));
 
@@ -102,12 +109,15 @@ export function generate(src: string) {
   const lines = [
     "// src/routes から plugins/routes.ts が書き出す。手で直さない",
     'import { Hono, type MiddlewareHandler } from "hono";',
-    'import { putMatch, toRoute, type Route } from "./router";',
+    'import { putMatch, toRoute, toSegment, type Route } from "./router";',
     ...imports,
+    "",
+    "// レイアウトの段。同じレイアウトは、どのルートからも同じものを指す（データの使い回しに使う）",
+    ...segments,
     "",
     "// Hono には middleware（ガード）と action だけを任せる。GET では、当たったルートを置いて返すだけ",
     "function page(app: Hono, path: string, route: Route, middlewares: MiddlewareHandler[]) {",
-    "  if (route.Component) {",
+    "  if (route.segments.at(-1)?.Component) {",
     "    app.on(\"GET\", [path], ...middlewares, (c) => {",
     "      putMatch(c.req.raw, route, c.req.param() as Record<string, string>);",
     "      return c.body(null);",
@@ -125,11 +135,11 @@ export function generate(src: string) {
     "",
     ...pages.map(
       (p) =>
-        `page(app, "${p.path}", toRoute(${p.module}, [${pick(layouts, p.dir).join(", ")}]), [${pick(middlewares, p.dir).join(", ")}]);`,
+        `page(app, "${p.path}", toRoute([${pick(layouts, p.dir).join(", ")}], ${paramNamesOf(p.dir)}, ${p.module}), [${pick(middlewares, p.dir).join(", ")}]);`,
     ),
     ...(notFound
       ? [
-          `page(app, "*", { Component: ${notFound}, layouts: [${pick(layouts, "").join(", ")}] }, [${pick(middlewares, "").join(", ")}]);`,
+          `page(app, "*", toRoute([${pick(layouts, "").join(", ")}], [], { default: ${notFound} }), [${pick(middlewares, "").join(", ")}]);`,
         ]
       : []),
     "",
