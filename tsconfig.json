@@ -12,9 +12,11 @@
     "noEmit": true,
     "skipLibCheck": true,
     "jsx": "react-jsx",
-    "jsxImportSource": "hono/jsx/dom"
+    "jsxImportSource": "hono/jsx/dom",
+    "rootDirs": [".", "./.routes-types"]
   },
   "include": [
-    "src"
+    "src",
+    ".routes-types"
   ]
 }

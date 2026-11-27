@@ -63,6 +63,34 @@ function ancestorsOf(dir: string) {
   return ["", ...parts.map((_, i) => parts.slice(0, i + 1).join("/"))];
 }
 
+// ページやレイアウトのファイルごとの型（React Router の +types と同じ考え方）。
+// .routes-types/src/routes/<dir>/+types/<file>.ts に書き、tsconfig の rootDirs で
+// src/routes/<dir>/+types/<file> として import できるようにする
+function typesFileOf(src: string, file: string, routePath: string, kind: "page" | "layout") {
+  const rel = path.relative(src, file).split(path.sep).join("/"); // routes/users/[id]/index.tsx
+  const dir = path.posix.dirname(rel);
+  const base = path.posix.basename(rel).replace(/\.tsx?$/, "");
+  const virtualDir = `${dir}/+types`; // src から見た、型のファイルの置き場所
+  const toSrc = path.posix.relative(virtualDir, ".") || ".";
+  const out = path.join(path.dirname(src), ".routes-types", path.basename(src), virtualDir, `${base}.ts`);
+  const code = [
+    "// plugins/routes.ts が書き出す。手で直さない",
+    `import type { Child } from "hono/jsx";`,
+    `import type { LoaderArgs as Args, LoaderDataOfModule, SchemaOfModule } from "${toSrc}/router";`,
+    `import type * as Module from "../${base}";`,
+    "",
+    "export namespace Route {",
+    `  export type LoaderArgs = Args<${JSON.stringify(routePath)}, SchemaOfModule<typeof Module>>;`,
+    kind === "layout"
+      ? "  export type ComponentProps = { data: LoaderDataOfModule<typeof Module>; children?: Child };"
+      : "  export type ComponentProps = { data: LoaderDataOfModule<typeof Module> };",
+    "  export type ErrorProps = { error: unknown };",
+    "}",
+    "",
+  ].join("\n");
+  return { out, code };
+}
+
 export function generate(src: string) {
   const routesDir = path.join(src, "routes");
   const files = filesIn(routesDir).sort();
@@ -76,6 +104,7 @@ export function generate(src: string) {
   const layouts = new Map<string, string>();
   const layoutModules = new Map<string, string>();
   const pages: { path: string; module: string; dir: string }[] = [];
+  const types: { out: string; code: string }[] = [];
   let notFound: string | undefined;
 
   // その段の params の名前。/users/[id] の段なら ["id"]。レイアウトのデータを使い回せるかの判断に使う
@@ -88,6 +117,7 @@ export function generate(src: string) {
     if (PAGE_NAMES.includes(name)) {
       imports.push(`import * as page${i} from "${importPath(file)}";`);
       pages.push({ path: routePathOf(dir), module: `page${i}`, dir });
+      types.push(typesFileOf(src, file, routePathOf(dir), "page"));
     } else if (MIDDLEWARE_NAMES.includes(name)) {
       imports.push(`import middleware${i} from "${importPath(file)}";`);
       middlewares.set(dir, `middleware${i}`);
@@ -96,6 +126,7 @@ export function generate(src: string) {
       segments.push(`const layout${i} = toSegment(${paramNamesOf(dir)}, layoutModule${i});`);
       layouts.set(dir, `layout${i}`);
       layoutModules.set(dir, `layoutModule${i}`);
+      types.push(typesFileOf(src, file, routePathOf(dir), "layout"));
     } else if (NOT_FOUND_NAMES.includes(name) && dir === "") {
       imports.push(`import NotFound from "${importPath(file)}";`);
       notFound = "NotFound";
@@ -158,16 +189,31 @@ export function generate(src: string) {
     "}",
     "",
   ];
-  return lines.join("\n");
+  return { code: lines.join("\n"), types };
 }
 
 // 中身が変わったときだけ書く
-export function writeRoutes(src: string) {
-  const out = path.join(src, "routes.gen.ts");
-  const code = generate(src);
+function writeIfChanged(out: string, code: string) {
   if (fs.existsSync(out) && fs.readFileSync(out, "utf8") === code) return;
+  fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, code);
   console.log(`✓ ${path.relative(process.cwd(), out)} を書き出した`);
+}
+
+export function writeRoutes(src: string) {
+  const { code, types } = generate(src);
+  writeIfChanged(path.join(src, "routes.gen.ts"), code);
+
+  // 型のファイルを書く。消えたページやレイアウトの型のファイルは消す
+  const typesRoot = path.join(path.dirname(src), ".routes-types");
+  const keep = new Set(types.map((t) => t.out));
+  if (fs.existsSync(typesRoot)) {
+    for (const file of fs.readdirSync(typesRoot, { recursive: true, encoding: "utf8" })) {
+      const full = path.join(typesRoot, file);
+      if (full.endsWith(".ts") && !keep.has(full)) fs.rmSync(full);
+    }
+  }
+  for (const t of types) writeIfChanged(t.out, t.code);
 }
 
 // dev と build の前に書き出し、dev の間は src/routes にファイルが増えたり減ったりしたら書き直す

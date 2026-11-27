@@ -1,21 +1,15 @@
-import type { Child } from "hono/jsx";
 import { fetchUsers } from "../../lib/users";
-import { href, type LoaderArgs } from "../../router";
+import { href } from "../../router";
+import type { Route } from "./+types/_layout";
 
 // サイドバーのユーザー一覧。/users 配下のページの loader と同時に取りに行く
-export const loader = ({ request }: LoaderArgs) => fetchUsers(request.signal);
+export const loader = ({ request }: Route.LoaderArgs) => fetchUsers(request.signal);
 
 export function Pending() {
   return <p>ユーザー一覧を読み込み中…</p>;
 }
 
-export default function UsersLayout({
-  data,
-  children,
-}: {
-  data: Awaited<ReturnType<typeof loader>>;
-  children?: Child;
-}) {
+export default function UsersLayout({ data, children }: Route.ComponentProps) {
   return (
     <div style={{ display: "flex", gap: "24px" }}>
       <aside>

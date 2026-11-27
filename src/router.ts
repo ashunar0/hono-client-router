@@ -21,6 +21,10 @@ type OutputOf<S> = S extends SearchSchema<infer O> ? O : Record<never, never>;
 // ページやレイアウトのファイルが受け付ける search params。リンクを作るときは、どれも省略できる
 export type SearchOfModule<M> = M extends { validateSearch: infer S } ? Partial<OutputOf<S>> : Record<never, never>;
 
+// ファイルの中身から、生成した型（+types）が使う型を取り出す
+export type SchemaOfModule<M> = M extends { validateSearch: infer S } ? S : undefined;
+export type LoaderDataOfModule<M> = M extends { loader: (...args: never[]) => infer R } ? Awaited<R> : undefined;
+
 // ---- ルートの定義 ----
 
 // routes.gen.ts が declare module で routes を書き足す（ルートのパス → そのルートの search params）

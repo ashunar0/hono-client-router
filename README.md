@@ -36,18 +36,20 @@ src/routes/
 
 ```tsx
 // src/routes/users/[id]/index.tsx
-export const loader = ({ params, request }: LoaderArgs<"/users/:id">) =>
+import type { Route } from "./+types/index";
+
+export const loader = ({ params, request }: Route.LoaderArgs) =>
   fetchUser(params.id, request.signal);
 
 export function Pending() {
   return <p>ユーザーを読み込み中…</p>;
 }
 
-export function ErrorComponent({ error }: { error: unknown }) {
+export function ErrorComponent({ error }: Route.ErrorProps) {
   return <p>読み込めませんでした：{String(error)}</p>;
 }
 
-export default function UserPage({ data }: { data: Awaited<ReturnType<typeof loader>> }) {
+export default function UserPage({ data }: Route.ComponentProps) {
   return <h1>{data.name}</h1>;
 }
 
@@ -65,7 +67,7 @@ const guard: MiddlewareHandler = async (c, next) => {
 export default guard;
 ```
 
-`LoaderArgs<"/users/:id">` と書くと、`params.id` に型が付きます。`request.signal` は、次の遷移が始まると abort されます。
+`Route` は、ページやレイアウトのファイルごとに生成される型です（React Router v7 の `+types` と同じ考え方）。`Route.LoaderArgs` では `params.id` や `search` に型が付き、`Route.ComponentProps` の `data` は loader の戻り値の型になります。型は `.routes-types/` に書き出し、tsconfig の `rootDirs` で `./+types/<ファイル名>` から読めるようにしています。`import type` で読んでください。`request.signal` は、次の遷移が始まると abort されます。
 
 レイアウトとページの loader は、同時に呼ばれます。/users/1 → /users/2 のように同じレイアウトのまま移るときは、レイアウトの loader は呼び直さずにデータを使い回します（action のあとは呼び直します）。search params（`?page=2` など）は、段ごとに `validateSearch` で受け付けるものを決めます。Standard Schema に対応したライブラリ（zod、valibot など）のスキーマを export すると、loader は検証済みで型の付いた `search` を受け取ります。検証したあとの search が変わった段だけ、loader を呼び直します。
 
@@ -75,7 +77,7 @@ export const validateSearch = z.object({
   page: z.coerce.number().int().min(1).catch(1),
 });
 
-export const loader = ({ search, request }: LoaderArgs<"/users", typeof validateSearch>) =>
+export const loader = ({ search, request }: Route.LoaderArgs) =>
   fetchUserPage(search.page, request.signal);
 ```
 
@@ -145,7 +147,8 @@ src/
   lib/              サンプルアプリのログイン状態とデータ取得
   main.tsx          ルート定義とルーターをつなぐ
 plugins/
-  routes.ts         src/routes から routes.gen.ts を書き出す
+  routes.ts         src/routes から routes.gen.ts と .routes-types/ を書き出す
+.routes-types/      ルートごとの型（+types）。コミットしない
 ```
 
 ## 動かし方
