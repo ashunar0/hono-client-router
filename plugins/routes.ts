@@ -1,8 +1,8 @@
 /**
  * src/routes のディレクトリから src/routes.gen.ts を書き出す。
  * ディレクトリの決まりは hono-kit に揃えている（ディレクトリが URL、1 ディレクトリに index.tsx が 1 つ）。
- * ページのファイルは、画面のコンポーネントを default export し、loader / Pending / action を名前付きで export する。
- * レイアウト（_layout.tsx）も、コンポーネントを default export し、loader / Pending を名前付きで export できる。
+ * ページのファイルは、画面のコンポーネントを default export し、loader / Pending / ErrorComponent / action を名前付きで export する。
+ * レイアウト（_layout.tsx）も、コンポーネントを default export し、loader / Pending / ErrorComponent を名前付きで export できる。
  * hono-kit にない決まりとして、_layout.tsx（レイアウト）、_middleware.ts（ガードなど）、_404.tsx（どれにも当たらないとき）を読む。
  *
  * Vite からはプラグインとして、それ以外（tsc の前）は `node plugins/routes.ts` で使う

@@ -27,8 +27,8 @@ src/routes/
 
 | ファイル | 中身 |
 |---|---|
-| `index.tsx` | 画面のコンポーネントを default export する。必要なら `loader`（データ取得）、`Pending`（待っている間の表示）、`action`（フォーム送信）を名前付きで export する |
-| `_layout.tsx` | レイアウトのコンポーネントを default export する。ページと同じように `loader` と `Pending` も export できる。外側のディレクトリのレイアウトほど外側に包む |
+| `index.tsx` | 画面のコンポーネントを default export する。必要なら `loader`（データ取得）、`Pending`（待っている間の表示）、`ErrorComponent`（loader が失敗したときの表示）、`action`（フォーム送信）を名前付きで export する |
+| `_layout.tsx` | レイアウトのコンポーネントを default export する。ページと同じように `loader` / `Pending` / `ErrorComponent` も export できる。外側のディレクトリのレイアウトほど外側に包む |
 | `_middleware.ts` | Hono の middleware を default export する。そのディレクトリ配下のすべてのルートで動く |
 | `_404.tsx` | `src/routes/` の直下にだけ置ける。どのルートにも当たらないときのコンポーネントを default export する |
 
@@ -41,6 +41,10 @@ export const loader = ({ params, request }: LoaderArgs<"/users/:id">) =>
 
 export function Pending() {
   return <p>ユーザーを読み込み中…</p>;
+}
+
+export function ErrorComponent({ error }: { error: unknown }) {
+  return <p>読み込めませんでした：{String(error)}</p>;
 }
 
 export default function UserPage({ data }: { data: Awaited<ReturnType<typeof loader>> }) {
@@ -65,6 +69,8 @@ export default guard;
 
 レイアウトとページの loader は、同時に呼ばれます。/users/1 → /users/2 のように同じレイアウトのまま移るときは、レイアウトの loader は呼び直さずにデータを使い回します（action のあとは呼び直します）。
 
+loader が失敗すると、その段から外側に向かっていちばん近い `ErrorComponent` を、その段の場所に出します。それより外側のレイアウトはそのまま描きます。どの段にも `ErrorComponent` がなければ、決まった表示を画面全体に出します。
+
 リンクは `href()` で作ると、パスと params に型が付きます。存在しないパスや足りない params は型エラーになります。
 
 ```tsx
@@ -84,6 +90,7 @@ export default guard;
 | リダイレクト | `redirect()` / middleware では `c.redirect()` | `redirect()` |
 | ガード | `_middleware.ts` | 親ルートの `loader` / middleware |
 | レイアウト | `_layout.tsx` | `<Outlet />` |
+| loader のエラー | `ErrorComponent` | `ErrorBoundary` |
 | 404 | `_404.tsx` | `errorElement` |
 | 遷移の中断 | `request.signal` | `request.signal` |
 | 遷移中かどうか | `useNavigating()` | `useNavigation().state` |
@@ -135,6 +142,6 @@ pnpm dev
 
 ## 未対応のこと
 
-- エラー時の表示をルートごとに決めること（今は adapter が決まった文言を出すだけ）
+- コンポーネントの描画中のエラーと、action のエラーを受けること（今は loader のエラーだけ）
 - スクロール位置をリロードのあとも残すこと（今はメモリに覚えているだけ）
 - `#section` のようなハッシュへのリンク

@@ -24,6 +24,7 @@ export type RouteModule = {
   loader?(args: LoaderArgs): unknown;
   action?(args: ActionArgs): Response | Promise<Response>;
   Pending?: unknown;
+  ErrorComponent?: unknown;
   default?: unknown;
 };
 
@@ -32,6 +33,7 @@ export type Segment = {
   paramNames: string[]; // この段までの params の名前。変わらなければ、データを使い回せる
   loader?(args: LoaderArgs): unknown;
   Pending?: unknown;
+  ErrorComponent?: unknown; // この段か、内側の段の loader が失敗したときに、この段の場所に出す
   Component?: unknown;
 };
 
@@ -40,6 +42,7 @@ export const toSegment = (paramNames: string[], module: RouteModule): Segment =>
   paramNames,
   loader: module.loader,
   Pending: module.Pending,
+  ErrorComponent: module.ErrorComponent,
   Component: module.default,
 });
 
