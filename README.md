@@ -6,9 +6,27 @@ Hono のアプリは `app.fetch(request)` を呼ぶと `Response` を返しま�
 
 学習用の実験です。ライブラリとして配布はしていません。
 
+## パッケージ
+
+pnpm workspace で、ルーター本体と、描画のフレームワークごとの adapter と、サンプルアプリに分けています。TanStack Router の `router-core` と `react-router` / `solid-router` と同じ分け方です。
+
+| パッケージ | 中身 |
+|---|---|
+| `@hcr/core` | ルーター本体（`createRouter` / `href` / `redirect` / 型）と、生成のしくみ（`@hcr/core/vite`）。描画のフレームワークに依存しない |
+| `@hcr/hono-jsx` | hono/jsx/dom 用の adapter（`mountRouter` / `useNavigate` / `<Link>` / `useNavigating`）。core のものも export し直す |
+| `@hcr/react` | React 用の adapter。中身は `@hcr/hono-jsx` と同じ |
+| `apps/hono-jsx` | hono/jsx 版のサンプル |
+| `apps/react` | React 版のサンプル |
+
+アプリは adapter のパッケージから import します。
+
+```tsx
+import { createRouter, href, Link, mountRouter, useNavigate } from "@hcr/hono-jsx"; // React なら "@hcr/react"
+```
+
 ## 書き方
 
-`src/routes/` のディレクトリが URL になります。決まりは [hono-kit](https://github.com/ashunar0/hono-kit) に揃えています。
+アプリの `src/routes/` のディレクトリが URL になります（例は `apps/hono-jsx`）。決まりは [hono-kit](https://github.com/ashunar0/hono-kit) に揃えています。
 
 ```
 src/routes/
@@ -101,7 +119,7 @@ const navigate = useNavigate();
 navigate(href("/users", { search: { q } }), { replace: true, resetScroll: false });
 ```
 
-`plugins/routes.ts`（Vite プラグイン）が `src/routes/` を読んで、ルートを Hono の app に登録する `src/routes.gen.ts` を書き出します。dev の間は、ファイルを足したり消したりすると書き直します。`routes.gen.ts` はコミットしません。
+`@hcr/core/vite` の Vite プラグイン（`plugins: [routes()]`）が `src/routes/` を読んで、ルートを Hono の app に登録する `src/routes.gen.ts` を書き出します。dev の間は、ファイルを足したり消したりすると書き直します。`routes.gen.ts` はコミットしません。
 
 ## React Router との対応
 
@@ -127,9 +145,9 @@ navigate(href("/users", { search: { q } }), { replace: true, resetScroll: false 
 
 ルーターは 3 つに分かれています。
 
-- Hono（`src/routes.gen.ts` が登録する）：URL がどのルートに当たるかを決め、ガードの middleware を通す。POST なら action を動かす
-- `src/router.ts`（ルーティング）：ブラウザと Hono の間をつなぎ、loader を呼び、状態を `subscribe` 先に知らせる。画面のことは知らない
-- `src/jsx-adapter.tsx`（描画）：状態を見て、レイアウトの中に `Pending` / 画面のコンポーネント / エラーのどれかを `hono/jsx/dom` で描画する
+- Hono（アプリの `src/routes.gen.ts` が登録する）：URL がどのルートに当たるかを決め、ガードの middleware を通す。POST なら action を動かす
+- `@hcr/core`（ルーティング）：ブラウザと Hono の間をつなぎ、loader を呼び、状態を `subscribe` 先に知らせる。画面のことは知らない
+- adapter（`@hcr/hono-jsx` / `@hcr/react`、描画）：状態を見て、レイアウトの中に `Pending` / 画面のコンポーネント / エラーのどれかを描画する
 
 1. `<a>` のクリックとフォーム送信を横取りし、`history.pushState` で URL を更新する
 2. URL から `Request` を作り、`app.fetch` に渡す。Hono は当たったルートと params を置いて、本文が空の `Response` を返す
@@ -150,34 +168,38 @@ navigate(href("/users", { search: { q } }), { replace: true, resetScroll: false 
 ## ファイル構成
 
 ```
-src/
-  router.ts         ルーティング（画面のことは知らない）
-  jsx-adapter.tsx   hono/jsx での描画
-  routes/           ルート定義（サンプルアプリ）
-  routes.gen.ts     plugins/routes.ts が書き出す。コミットしない
-  lib/              サンプルアプリのログイン状態とデータ取得
-  main.tsx          ルート定義とルーターをつなぐ
-plugins/
-  routes.ts         src/routes から routes.gen.ts と .routes-types/ を書き出す
-examples/react/     React 版のサンプル
-.routes-types/      ルートごとの型（+types）。コミットしない
+packages/
+  core/src/router.ts       ルーター本体（画面のことは知らない）
+  core/src/vite.ts         src/routes から routes.gen.ts と .routes-types/ を書き出す Vite プラグイン
+  hono-jsx/src/index.tsx   hono/jsx/dom 用の adapter
+  react/src/index.tsx      React 用の adapter
+apps/
+  hono-jsx/                hono/jsx 版のサンプル
+  react/                   React 版のサンプル
+    src/routes/            ルート定義
+    src/lib/               サンプルのログイン状態とデータ取得
+    src/main.tsx           ルート定義とルーターをつなぐ
+    src/routes.gen.ts      生成される。コミットしない
+    .routes-types/         ルートごとの型（+types）。生成される。コミットしない
+notes/                     学習ノート（書いた時点の記録。今の構成とは違うところがある）
 ```
 
 ## 動かし方
 
 ```bash
 pnpm install
-pnpm dev         # hono/jsx 版
-pnpm dev:react   # React 版（examples/react）
+pnpm dev         # hono/jsx 版（apps/hono-jsx）
+pnpm dev:react   # React 版（apps/react）
+pnpm build       # 両方をビルドして型をチェックする
 ```
 
-## React 版
+## adapter の役割
 
-`examples/react/` は、同じルーター本体（`src/router.ts`）と生成のしくみ（`plugins/routes.ts`）を React で使うサンプルです。違うのは adapter（`examples/react/src/react-adapter.tsx`）とページだけで、ルーター本体は描画のフレームワークに依存していません。
+`apps/hono-jsx` と `apps/react` は、同じ `@hcr/core` を使っています。違うのは adapter とページだけです。
 
-- adapter は `useNavigate()` / `<Link>` / `useNavigating()` / `mountRouter()` を React の仕組みで作り、`href()` などルーター本体のものも export し直します
-- レイアウトの `children` の型は、adapter が `Register` に教えます（hono/jsx なら `Child`、React なら `ReactNode`）
-- 生成のしくみには、`routes({ router: "../../src/router.ts" })` でルーター本体の場所を渡します
+- adapter は `useNavigate()` / `<Link>` / `useNavigating()` / `mountRouter()` を、それぞれのフレームワークの仕組みで作ります
+- レイアウトの `children` の型は、adapter が `declare module "@hcr/core"` で `Register` に教えます（hono/jsx なら `Child`、React なら `ReactNode`）
+- React 版の検索欄は、`value` ではなく `defaultValue` にしています。React の `value` だと、遷移が終わるまで入力欄が古い値に戻されるためです
 
 ## 未対応のこと
 

@@ -1,0 +1,14 @@
+{
+  "name": "@hcr/hono-jsx",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.tsx"
+  },
+  "dependencies": {
+    "@hcr/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "hono": "^4.13.21"
+  }
+}

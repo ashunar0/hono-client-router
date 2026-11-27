@@ -1,0 +1,12 @@
+{
+  "name": "@hcr/core",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/router.ts",
+    "./vite": "./src/vite.ts"
+  },
+  "peerDependencies": {
+    "hono": "^4.13.21"
+  }
+}
