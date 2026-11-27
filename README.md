@@ -92,6 +92,15 @@ loader が失敗すると、その段から外側に向かっていちばん近�
 <a href={href("/users", { search: { page: 2 } })}>2 ページ目</a>
 ```
 
+`<Link>` は、今いるページを指していれば `aria-current="page"` を付けます。配下のページにいても付きます（`end` を付けると完全に一致したときだけ）。コードから遷移するときは `useNavigate()` を使います。`<Link to>` と `navigate()` は `href()` で作った URL しか受け取らないので、文字列を直接渡すと型エラーになります。
+
+```tsx
+<Link to={href("/users")}>Users</Link>
+
+const navigate = useNavigate();
+navigate(href("/users", { search: { q } }), { replace: true, resetScroll: false });
+```
+
 `plugins/routes.ts`（Vite プラグイン）が `src/routes/` を読んで、ルートを Hono の app に登録する `src/routes.gen.ts` を書き出します。dev の間は、ファイルを足したり消したりすると書き直します。`routes.gen.ts` はコミットしません。
 
 ## React Router との対応
@@ -110,6 +119,8 @@ loader が失敗すると、その段から外側に向かっていちばん近�
 | search params | `validateSearch` と loader の `search` | `new URL(request.url).searchParams` |
 | 遷移の中断 | `request.signal` | `request.signal` |
 | 遷移中かどうか | `useNavigating()` | `useNavigation().state` |
+| リンク | `<Link>`（今いるページなら `aria-current="page"`） | `<NavLink>` |
+| コードから遷移 | `useNavigate()` | `useNavigate()` |
 | 先読み | リンクにマウスを乗せると自動 | `<Link prefetch="intent">` |
 
 ## 仕組み

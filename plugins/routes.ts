@@ -82,8 +82,8 @@ function typesFileOf(src: string, file: string, routePath: string, kind: "page" 
     "export namespace Route {",
     `  export type LoaderArgs = Args<${JSON.stringify(routePath)}, SchemaOfModule<typeof Module>>;`,
     kind === "layout"
-      ? "  export type ComponentProps = { data: LoaderDataOfModule<typeof Module>; children?: Child };"
-      : "  export type ComponentProps = { data: LoaderDataOfModule<typeof Module> };",
+      ? "  export type ComponentProps = { data: LoaderDataOfModule<typeof Module>; search: LoaderArgs[\"search\"]; children?: Child };"
+      : "  export type ComponentProps = { data: LoaderDataOfModule<typeof Module>; search: LoaderArgs[\"search\"] };",
     "  export type ErrorProps = { error: unknown };",
     "}",
     "",

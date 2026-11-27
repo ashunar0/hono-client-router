@@ -29,17 +29,17 @@ export function fetchUsers(signal: AbortSignal) {
   });
 }
 
-// ユーザーの一覧を 1 ページぶん取ってくるふり（0.3 秒かかる）。全 9 人を 3 人ずつ
-export function fetchUserPage(page: number, signal: AbortSignal) {
+// ユーザーの一覧を 1 ページぶん取ってくるふり（0.3 秒かかる）。全 9 人を、名前に q を含む人に絞って 3 人ずつ
+export function fetchUserPage(page: number, q: string, signal: AbortSignal) {
   const perPage = 3;
-  const total = 9;
   return new Promise<{ page: number; totalPages: number; users: { id: string; name: string }[] }>((resolve, reject) => {
     const timer = setTimeout(() => {
-      const ids = Array.from({ length: perPage }, (_, i) => (page - 1) * perPage + i + 1).filter((id) => id <= total);
+      const all = Array.from({ length: 9 }, (_, i) => ({ id: String(i + 1), name: `ユーザー${i + 1}` }));
+      const hits = all.filter((user) => user.name.includes(q));
       resolve({
         page,
-        totalPages: Math.ceil(total / perPage),
-        users: ids.map((id) => ({ id: String(id), name: `ユーザー${id}` })),
+        totalPages: Math.max(1, Math.ceil(hits.length / perPage)),
+        users: hits.slice((page - 1) * perPage, page * perPage),
       });
     }, 300);
     signal.addEventListener("abort", () => {

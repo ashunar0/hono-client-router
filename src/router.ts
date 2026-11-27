@@ -104,6 +104,9 @@ type HrefOptions<P extends string> = (keyof ParamsOf<P> extends never ? { params
   search?: P extends keyof Routes ? (keyof Routes[P] extends never ? never : Routes[P]) : never;
 };
 
+// href() で作った URL。navigate() と <Link to> は、これしか受け取らない（文字列を直接渡すと型エラーになる）
+export type Href = string & { readonly __brand: "Href" };
+
 // ルートのパスと params / search から URL を作る。存在しないパス、足りない params、受け付けない search は型エラーになる。
 // P を RoutePath で縛らないのは、一覧にないパスのとき「引数の数が違う」ではなく
 // 「そのパスは一覧にない」というエラーにするため
@@ -114,7 +117,7 @@ export function href<P extends string>(
       ? [options?: HrefOptions<P>]
       : [options: HrefOptions<P>]
     : [options?: unknown]
-): string {
+): Href {
   const { params = {}, search = {} } = (options ?? {}) as {
     params?: Record<string, string>;
     search?: Record<string, unknown>;
@@ -125,7 +128,7 @@ export function href<P extends string>(
   );
   const entries = Object.entries(search).filter(([, value]) => value !== undefined);
   const query = new URLSearchParams(entries.map(([key, value]) => [key, String(value)])).toString();
-  return query ? `${pathname}?${query}` : pathname;
+  return (query ? `${pathname}?${query}` : pathname) as Href;
 }
 
 // action から返すリダイレクト
@@ -156,18 +159,26 @@ export type SegmentState = {
 export type RouterState = {
   matches: SegmentState[]; // いま出しているルートの段。外側から順
   params: Record<string, string>;
+  location: { pathname: string; search: string }; // いま出している画面の URL
   navigating: boolean; // 遷移の途中か
+};
+
+export type NavigateOptions = {
+  replace?: boolean; // 履歴を積まずに、今の項目を置き換える
+  resetScroll?: boolean; // 描いたあとに一番上へスクロールするか（初期値は true）
 };
 
 export type Router = {
   // 状態が変わるたびに受け取る。登録した時点で状態があれば、すぐに 1 回呼ぶ
   subscribe(listener: (state: RouterState) => void): () => void;
+  // コードから遷移する。URL は href() で作る
+  navigate(to: Href, options?: NavigateOptions): void;
 };
 
 // ルーティングだけを担当する。画面に何をどう描くかは知らない
 export function createRouter(app: Hono): Router {
   const listeners = new Set<(state: RouterState) => void>();
-  let state: RouterState = { matches: [], params: {}, navigating: false };
+  let state: RouterState = { matches: [], params: {}, location: { pathname: "", search: "" }, navigating: false };
   let started = false;
 
   function publish(next: Partial<RouterState>) {
@@ -294,7 +305,8 @@ export function createRouter(app: Hono): Router {
       // action がリダイレクトしなかったときは、同じ URL を GET で読み直す
       if (req.method === "POST") return navigate(url, undefined, scrollTop, true);
       // どのルートにも当たらず、_404 もないとき
-      return publish({ matches: [], params: {}, navigating: false });
+      const { pathname, search } = new URL(url);
+      return publish({ matches: [], params: {}, location: { pathname, search }, navigating: false });
     }
 
     const { route, params } = match;
@@ -334,7 +346,10 @@ export function createRouter(app: Hono): Router {
       return !first || first.status === "error" || Boolean(first.segment.Pending);
     };
     const show = () => {
-      if (showable(next)) publish({ matches: next, params, navigating: next.some((m) => m.status === "pending") });
+      if (showable(next)) {
+        const { pathname, search } = new URL(url);
+        publish({ matches: next, params, location: { pathname, search }, navigating: next.some((m) => m.status === "pending") });
+      }
     };
     show();
 
@@ -415,6 +430,12 @@ export function createRouter(app: Hono): Router {
   navigate(location.href, undefined, scrollY);
 
   return {
+    navigate(to, { replace = false, resetScroll = true } = {}) {
+      const url = new URL(to, location.href).href;
+      if (replace) history.replaceState({ key: currentKey }, "", url);
+      else push(url);
+      navigate(url, undefined, resetScroll ? 0 : scrollY);
+    },
     subscribe(listener) {
       listeners.add(listener);
       if (started) listener(state);
