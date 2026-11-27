@@ -2,3 +2,4 @@ node_modules
 dist
 src/routes.gen.ts
 .routes-types
+examples/react/src/routes.gen.ts

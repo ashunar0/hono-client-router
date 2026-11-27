@@ -27,10 +27,13 @@ export type LoaderDataOfModule<M> = M extends { loader: (...args: never[]) => in
 
 // ---- ルートの定義 ----
 
-// routes.gen.ts が declare module で routes を書き足す（ルートのパス → そのルートの search params）
+// routes.gen.ts が declare module で routes を書き足す（ルートのパス → そのルートの search params）。
+// adapter は child（レイアウトの children の型）を書き足す
 export interface Register {}
 type Routes = Register extends { routes: infer R } ? R : Record<string, Record<never, never>>;
 export type RoutePath = keyof Routes & string;
+// レイアウトの children の型。adapter が declare module で Register に child を書き足す（hono/jsx なら Child、React なら ReactNode）
+export type RouteChild = Register extends { child: infer C } ? C : unknown;
 
 // "/users/:id" → { id: string }。catch-all の ":path{.+}" も path になる
 type ParamsOf<P extends string> = P extends `${string}:${infer Name}/${infer Rest}`

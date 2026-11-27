@@ -3,6 +3,13 @@ import type { Child, FC } from "hono/jsx";
 import { createContext, render, useContext, useState } from "hono/jsx/dom";
 import type { Href, Router, RouterState, SegmentState } from "./router";
 
+// レイアウトの children の型を router.ts に教える（生成した Route.ComponentProps が使う）
+declare module "./router" {
+  interface Register {
+    child: Child;
+  }
+}
+
 const NavigatingContext = createContext(false);
 const LocationContext = createContext<RouterState["location"]>({ pathname: "", search: "" });
 const RouterContext = createContext<Router | null>(null);

@@ -66,23 +66,29 @@ function ancestorsOf(dir: string) {
 // ページやレイアウトのファイルごとの型（React Router の +types と同じ考え方）。
 // .routes-types/src/routes/<dir>/+types/<file>.ts に書き、tsconfig の rootDirs で
 // src/routes/<dir>/+types/<file> として import できるようにする
-function typesFileOf(src: string, file: string, routePath: string, kind: "page" | "layout") {
+// from のディレクトリから router.ts への import のパス（拡張子なし）
+function importPathTo(fromDir: string, router: string) {
+  const rel = path.relative(fromDir, router).split(path.sep).join("/").replace(/\.tsx?$/, "");
+  return rel.startsWith(".") ? rel : `./${rel}`;
+}
+
+function typesFileOf(src: string, router: string, file: string, routePath: string, kind: "page" | "layout") {
   const rel = path.relative(src, file).split(path.sep).join("/"); // routes/users/[id]/index.tsx
   const dir = path.posix.dirname(rel);
   const base = path.posix.basename(rel).replace(/\.tsx?$/, "");
   const virtualDir = `${dir}/+types`; // src から見た、型のファイルの置き場所
-  const toSrc = path.posix.relative(virtualDir, ".") || ".";
   const out = path.join(path.dirname(src), ".routes-types", path.basename(src), virtualDir, `${base}.ts`);
+  // router.ts は src の外にあることもあるので（examples/react）、rootDirs に頼らず、型のファイルの実際の場所から数える
+  const routerImport = importPathTo(path.dirname(out), router);
   const code = [
     "// plugins/routes.ts が書き出す。手で直さない",
-    `import type { Child } from "hono/jsx";`,
-    `import type { LoaderArgs as Args, LoaderDataOfModule, SchemaOfModule } from "${toSrc}/router";`,
+    `import type { LoaderArgs as Args, LoaderDataOfModule, RouteChild, SchemaOfModule } from "${routerImport}";`,
     `import type * as Module from "../${base}";`,
     "",
     "export namespace Route {",
     `  export type LoaderArgs = Args<${JSON.stringify(routePath)}, SchemaOfModule<typeof Module>>;`,
     kind === "layout"
-      ? "  export type ComponentProps = { data: LoaderDataOfModule<typeof Module>; search: LoaderArgs[\"search\"]; children?: Child };"
+      ? "  export type ComponentProps = { data: LoaderDataOfModule<typeof Module>; search: LoaderArgs[\"search\"]; children?: RouteChild };"
       : "  export type ComponentProps = { data: LoaderDataOfModule<typeof Module>; search: LoaderArgs[\"search\"] };",
     "  export type ErrorProps = { error: unknown };",
     "}",
@@ -91,7 +97,8 @@ function typesFileOf(src: string, file: string, routePath: string, kind: "page" 
   return { out, code };
 }
 
-export function generate(src: string) {
+export function generate(src: string, router: string) {
+  const routerImport = importPathTo(src, router);
   const routesDir = path.join(src, "routes");
   const files = filesIn(routesDir).sort();
   const dirOf = (file: string) => path.relative(routesDir, path.dirname(file)).split(path.sep).join("/");
@@ -117,7 +124,7 @@ export function generate(src: string) {
     if (PAGE_NAMES.includes(name)) {
       imports.push(`import * as page${i} from "${importPath(file)}";`);
       pages.push({ path: routePathOf(dir), module: `page${i}`, dir });
-      types.push(typesFileOf(src, file, routePathOf(dir), "page"));
+      types.push(typesFileOf(src, router, file, routePathOf(dir), "page"));
     } else if (MIDDLEWARE_NAMES.includes(name)) {
       imports.push(`import middleware${i} from "${importPath(file)}";`);
       middlewares.set(dir, `middleware${i}`);
@@ -126,7 +133,7 @@ export function generate(src: string) {
       segments.push(`const layout${i} = toSegment(${paramNamesOf(dir)}, layoutModule${i});`);
       layouts.set(dir, `layout${i}`);
       layoutModules.set(dir, `layoutModule${i}`);
-      types.push(typesFileOf(src, file, routePathOf(dir), "layout"));
+      types.push(typesFileOf(src, router, file, routePathOf(dir), "layout"));
     } else if (NOT_FOUND_NAMES.includes(name) && dir === "") {
       imports.push(`import NotFound from "${importPath(file)}";`);
       notFound = "NotFound";
@@ -142,7 +149,7 @@ export function generate(src: string) {
   const lines = [
     "// src/routes から plugins/routes.ts が書き出す。手で直さない",
     'import { Hono, type MiddlewareHandler } from "hono";',
-    'import { putMatch, toRoute, toSegment, type Route, type SearchOfModule } from "./router";',
+    `import { putMatch, toRoute, toSegment, type Route, type SearchOfModule } from "${routerImport}";`,
     ...imports,
     "",
     "// レイアウトの段。同じレイアウトは、どのルートからも同じものを指す（データの使い回しに使う）",
@@ -177,7 +184,7 @@ export function generate(src: string) {
       : []),
     "",
     "// ルートのパスと、そのルートの段が受け付ける search params を router.ts に教える。href() の型に使う",
-    'declare module "./router" {',
+    `declare module "${routerImport}" {`,
     "  interface Register {",
     "    routes: {",
     ...[...new Map(pages.map((p) => [p.path, p])).values()].map((p) => {
@@ -200,8 +207,8 @@ function writeIfChanged(out: string, code: string) {
   console.log(`✓ ${path.relative(process.cwd(), out)} を書き出した`);
 }
 
-export function writeRoutes(src: string) {
-  const { code, types } = generate(src);
+export function writeRoutes(src: string, router: string) {
+  const { code, types } = generate(src, router);
   writeIfChanged(path.join(src, "routes.gen.ts"), code);
 
   // 型のファイルを書く。消えたページやレイアウトの型のファイルは消す
@@ -216,21 +223,24 @@ export function writeRoutes(src: string) {
   for (const t of types) writeIfChanged(t.out, t.code);
 }
 
-// dev と build の前に書き出し、dev の間は src/routes にファイルが増えたり減ったりしたら書き直す
-export function routes(): Plugin {
+// dev と build の前に書き出し、dev の間は src/routes にファイルが増えたり減ったりしたら書き直す。
+// router は router.ts の場所（Vite の root から見たパス）
+export function routes({ router = "src/router.ts" }: { router?: string } = {}): Plugin {
   let src = "";
+  let routerFile = "";
   return {
     name: "routes",
     configResolved(config) {
       src = path.join(config.root, "src");
+      routerFile = path.resolve(config.root, router);
     },
     buildStart() {
-      writeRoutes(src);
+      writeRoutes(src, routerFile);
     },
     configureServer(server) {
       const routesDir = path.join(src, "routes") + path.sep;
       const rewrite = (file: string) => {
-        if (file.startsWith(routesDir)) writeRoutes(src);
+        if (file.startsWith(routesDir)) writeRoutes(src, routerFile);
       };
       server.watcher.on("add", rewrite);
       server.watcher.on("unlink", rewrite);
@@ -238,5 +248,8 @@ export function routes(): Plugin {
   };
 }
 
-// node plugins/routes.ts で実行されたとき
-if (import.meta.main) writeRoutes(path.resolve("src"));
+// node plugins/routes.ts [root] [router] で実行されたとき。root の既定は "."、router の既定は "src/router.ts"（root から見たパス）
+if (import.meta.main) {
+  const [root = ".", router = "src/router.ts"] = process.argv.slice(2);
+  writeRoutes(path.resolve(root, "src"), path.resolve(root, router));
+}

@@ -159,6 +159,7 @@ src/
   main.tsx          ルート定義とルーターをつなぐ
 plugins/
   routes.ts         src/routes から routes.gen.ts と .routes-types/ を書き出す
+examples/react/     React 版のサンプル
 .routes-types/      ルートごとの型（+types）。コミットしない
 ```
 
@@ -166,8 +167,17 @@ plugins/
 
 ```bash
 pnpm install
-pnpm dev
+pnpm dev         # hono/jsx 版
+pnpm dev:react   # React 版（examples/react）
 ```
+
+## React 版
+
+`examples/react/` は、同じルーター本体（`src/router.ts`）と生成のしくみ（`plugins/routes.ts`）を React で使うサンプルです。違うのは adapter（`examples/react/src/react-adapter.tsx`）とページだけで、ルーター本体は描画のフレームワークに依存していません。
+
+- adapter は `useNavigate()` / `<Link>` / `useNavigating()` / `mountRouter()` を React の仕組みで作り、`href()` などルーター本体のものも export し直します
+- レイアウトの `children` の型は、adapter が `Register` に教えます（hono/jsx なら `Child`、React なら `ReactNode`）
+- 生成のしくみには、`routes({ router: "../../src/router.ts" })` でルーター本体の場所を渡します
 
 ## 未対応のこと
 
