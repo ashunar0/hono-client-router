@@ -1,8 +1,7 @@
 import type { Route } from "./+types/index";
-import { fetchUser } from "../../../lib/users";
 
 // データを取る。request.signal は、次の遷移が始まったら abort される
-export const loader = ({ params, request }: Route.LoaderArgs) => fetchUser(params.id, request.signal);
+export const loader = ({ params, request, context }: Route.LoaderArgs) => context.users.fetchUser(params.id, request.signal);
 
 // データを待っている間に、レイアウトの中に出す
 export function Pending() {

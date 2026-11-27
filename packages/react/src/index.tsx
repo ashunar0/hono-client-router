@@ -6,7 +6,7 @@ import type { Href, Router, RouterState, SegmentState } from "@hcr/core";
 
 // core のものも、ここから使えるようにする（@tanstack/react-router が core のものを export し直しているのと同じ）
 export { createRouter, href, redirect } from "@hcr/core";
-export type { Href } from "@hcr/core";
+export type { Href, Middleware } from "@hcr/core";
 
 // レイアウトの children の型を core に教える（生成した Route.ComponentProps が使う）
 declare module "@hcr/core" {

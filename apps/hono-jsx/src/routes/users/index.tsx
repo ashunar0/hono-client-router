@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { fetchUserPage } from "../../lib/users";
 import { href, useNavigate } from "@hcr/hono-jsx";
 import type { Route } from "./+types/index";
 
@@ -10,8 +9,8 @@ export const validateSearch = z.object({
 });
 
 // search は検証済みで、search.page は number
-export const loader = ({ search, request }: Route.LoaderArgs) =>
-  fetchUserPage(search.page, search.q, request.signal);
+export const loader = ({ search, request, context }: Route.LoaderArgs) =>
+  context.users.fetchUserPage(search.page, search.q, request.signal);
 
 export default function UsersPage({ data, search }: Route.ComponentProps) {
   const navigate = useNavigate();

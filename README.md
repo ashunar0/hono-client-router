@@ -56,8 +56,8 @@ src/routes/
 // src/routes/users/[id]/index.tsx
 import type { Route } from "./+types/index";
 
-export const loader = ({ params, request }: Route.LoaderArgs) =>
-  fetchUser(params.id, request.signal);
+export const loader = ({ params, request, context }: Route.LoaderArgs) =>
+  context.users.fetchUser(params.id, request.signal);
 
 export function Pending() {
   return <p>ユーザーを読み込み中…</p>;
@@ -72,14 +72,14 @@ export default function UserPage({ data }: Route.ComponentProps) {
 }
 
 // src/routes/login/index.tsx
-export const action = () => {
-  logIn();
+export const action = ({ context }: Route.ActionArgs) => {
+  context.session.logIn();
   return redirect(href("/admin"));
 };
 
 // src/routes/admin/_middleware.ts（Hono の middleware）
-const guard: MiddlewareHandler = async (c, next) => {
-  if (!isLoggedIn()) return c.redirect(href("/login"));
+const guard: Middleware = async (c, next) => {
+  if (!c.env.session.isLoggedIn()) return c.redirect(href("/login"));
   await next();
 };
 export default guard;
@@ -95,9 +95,26 @@ export const validateSearch = z.object({
   page: z.coerce.number().int().min(1).catch(1),
 });
 
-export const loader = ({ search, request }: Route.LoaderArgs) =>
-  fetchUserPage(search.page, request.signal);
+export const loader = ({ search, request, context }: Route.LoaderArgs) =>
+  context.users.fetchUserPage(search.page, request.signal);
 ```
+
+loader と action と middleware が使うもの（API クライアント、ログイン状態など）は、ルートのファイルで import せずに、`createRouter` に `context` として渡します。型は `Register` に書き足すと、`Route.LoaderArgs` / `Route.ActionArgs` の `context` と、`Middleware` の `c.env` に付きます。`context` を渡し忘れると型エラーになります。
+
+```tsx
+// src/main.tsx
+const context = { users, session: createSession() };
+
+declare module "@hcr/core" {
+  interface Register {
+    context: typeof context;
+  }
+}
+
+const router = createRouter(app, { context });
+```
+
+action と middleware は Hono の中で動くので、ルーターは `app.fetch(request, context)` の第 2 引数で渡しています。Cloudflare Workers で env（バインディング）を渡すのと同じ通り道なので、Hono の側では `c.env` で読めます。
 
 loader が失敗すると、その段から外側に向かっていちばん近い `ErrorComponent` を、その段の場所に出します。それより外側のレイアウトはそのまま描きます。どの段にも `ErrorComponent` がなければ、決まった表示を画面全体に出します。
 
@@ -136,6 +153,7 @@ navigate(href("/users", { search: { q } }), { replace: true, resetScroll: false 
 | 404 | `_404.tsx` | `errorElement` |
 | search params | `validateSearch` と loader の `search` | `new URL(request.url).searchParams` |
 | 遷移の中断 | `request.signal` | `request.signal` |
+| loader / action に依存を渡す | `createRouter(app, { context })` | `context`（サーバーでは `getLoadContext`） |
 | 遷移中かどうか | `useNavigating()` | `useNavigation().state` |
 | リンク | `<Link>`（今いるページなら `aria-current="page"`） | `<NavLink>` |
 | コードから遷移 | `useNavigate()` | `useNavigate()` |
@@ -178,7 +196,7 @@ apps/
   react/                   React 版のサンプル
     src/routes/            ルート定義
     src/lib/               サンプルのログイン状態とデータ取得
-    src/main.tsx           ルート定義とルーターをつなぐ
+    src/main.tsx           ルート定義とルーターをつなぎ、context を渡す
     src/routes.gen.ts      生成される。コミットしない
     .routes-types/         ルートごとの型（+types）。生成される。コミットしない
 notes/                     学習ノート（書いた時点の記録。今の構成とは違うところがある）

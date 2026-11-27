@@ -1,4 +1,4 @@
-import { logIn } from "../../lib/session";
+import type { Route } from "./+types/index";
 import { href, redirect } from "@hcr/react";
 
 export default function LoginPage() {
@@ -12,7 +12,7 @@ export default function LoginPage() {
   );
 }
 
-export const action = () => {
-  logIn();
+export const action = ({ context }: Route.ActionArgs) => {
+  context.session.logIn();
   return redirect(href("/admin"));
 };

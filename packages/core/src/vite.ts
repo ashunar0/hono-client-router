@@ -77,11 +77,12 @@ function typesFileOf(src: string, file: string, routePath: string, kind: "page" 
   const out = path.join(path.dirname(src), ".routes-types", path.basename(src), virtualDir, `${base}.ts`);
   const code = [
     "// @hcr/core/vite が書き出す。手で直さない",
-    `import type { LoaderArgs as Args, LoaderDataOfModule, RouteChild, SchemaOfModule } from "${CORE}";`,
+    `import type { ActionArgs as Action, LoaderArgs as Args, LoaderDataOfModule, RouteChild, SchemaOfModule } from "${CORE}";`,
     `import type * as Module from "../${base}";`,
     "",
     "export namespace Route {",
     `  export type LoaderArgs = Args<${JSON.stringify(routePath)}, SchemaOfModule<typeof Module>>;`,
+    ...(kind === "page" ? [`  export type ActionArgs = Action<${JSON.stringify(routePath)}>;`] : []),
     kind === "layout"
       ? "  export type ComponentProps = { data: LoaderDataOfModule<typeof Module>; search: LoaderArgs[\"search\"]; children?: RouteChild };"
       : "  export type ComponentProps = { data: LoaderDataOfModule<typeof Module>; search: LoaderArgs[\"search\"] };",
@@ -160,7 +161,7 @@ export function generate(src: string) {
     "  const action = route.action;",
     "  if (action) {",
     "    app.on(\"POST\", [path], ...middlewares, (c) =>",
-    "      action({ params: c.req.param() as Record<string, string>, request: c.req.raw }),",
+    "      action({ params: c.req.param() as Record<string, string>, request: c.req.raw, context: c.env }),",
     "    );",
     "  }",
     "}",

@@ -1,7 +1,6 @@
-import { fetchUser } from "../../../lib/users";
 import type { Route } from "./+types/index";
 
-export const loader = ({ params, request }: Route.LoaderArgs) => fetchUser(params.id, request.signal);
+export const loader = ({ params, request, context }: Route.LoaderArgs) => context.users.fetchUser(params.id, request.signal);
 
 export function Pending() {
   return <p>ユーザーを読み込み中…</p>;

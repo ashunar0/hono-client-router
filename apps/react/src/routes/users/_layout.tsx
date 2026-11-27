@@ -1,8 +1,7 @@
-import { fetchUsers } from "../../lib/users";
 import { href } from "@hcr/react";
 import type { Route } from "./+types/_layout";
 
-export const loader = ({ request }: Route.LoaderArgs) => fetchUsers(request.signal);
+export const loader = ({ request, context }: Route.LoaderArgs) => context.users.fetchUsers(request.signal);
 
 export function Pending() {
   return <p>ユーザー一覧を読み込み中…</p>;

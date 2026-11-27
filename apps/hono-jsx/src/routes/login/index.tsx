@@ -1,5 +1,5 @@
+import type { Route } from "./+types/index";
 import { href, redirect } from "@hcr/hono-jsx";
-import { logIn } from "../../lib/session";
 
 export default function LoginPage() {
   return (
@@ -13,7 +13,7 @@ export default function LoginPage() {
 }
 
 // フォーム送信を受ける
-export const action = () => {
-  logIn();
+export const action = ({ context }: Route.ActionArgs) => {
+  context.session.logIn();
   return redirect(href("/admin"));
 };

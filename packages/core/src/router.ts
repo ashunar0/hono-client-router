@@ -1,4 +1,4 @@
-import type { Hono } from "hono";
+import type { Hono, MiddlewareHandler } from "hono";
 
 // ---- search params のスキーマ ----
 
@@ -34,6 +34,8 @@ type Routes = Register extends { routes: infer R } ? R : Record<string, Record<n
 export type RoutePath = keyof Routes & string;
 // レイアウトの children の型。adapter が declare module で Register に child を書き足す（hono/jsx なら Child、React なら ReactNode）
 export type RouteChild = Register extends { child: infer C } ? C : unknown;
+// loader / action / middleware に渡すもの。アプリが declare module で Register に context を書き足し、createRouter に渡す
+export type RouterContext = Register extends { context: infer C } ? C : undefined;
 
 // "/users/:id" → { id: string }。catch-all の ":path{.+}" も path になる
 type ParamsOf<P extends string> = P extends `${string}:${infer Name}/${infer Rest}`
@@ -44,17 +46,22 @@ type ParamsOf<P extends string> = P extends `${string}:${infer Name}/${infer Res
 type StripPattern<Name extends string> = Name extends `${infer N}{${string}}` ? N : Name;
 
 // loader と action が受け取るもの。request.signal は、遷移が古くなったら abort される。
-// search は、その段の validateSearch で検証したもの（S に typeof validateSearch を渡すと型が付く）
+// search は、その段の validateSearch で検証したもの（S に typeof validateSearch を渡すと型が付く）。
+// context は、createRouter に渡したもの
 export type LoaderArgs<P extends string = string, S = undefined> = {
   params: ParamsOf<P>;
   request: Request;
   search: OutputOf<S>;
+  context: RouterContext;
 };
-export type ActionArgs<P extends string = string> = { params: ParamsOf<P>; request: Request };
+export type ActionArgs<P extends string = string> = { params: ParamsOf<P>; request: Request; context: RouterContext };
+
+// _middleware.ts の型。c.env で context を読める
+export type Middleware = MiddlewareHandler<{ Bindings: RouterContext extends object ? RouterContext : object }>;
 
 // ルーターの側から見た loader の引数。ページごとの LoaderArgs<"/users/:id", ...> をどれも受け入れられるように、
 // 型引数を使わずに書く（型引数で比べると、search の型が合わないと判定されてしまう）
-type AnyLoaderArgs = { params: Record<string, string>; request: Request; search: unknown };
+type AnyLoaderArgs = { params: Record<string, string>; request: Request; search: unknown; context: unknown };
 
 // ページのファイル（index.tsx）とレイアウト（_layout.tsx）が export するもの。画面のコンポーネントは default export。
 // コンポーネントは adapter が描くので、ここでは中身を知らない
@@ -178,8 +185,17 @@ export type Router = {
   navigate(to: Href, options?: NavigateOptions): void;
 };
 
+// createRouter の 2 つ目の引数。Register に context を書き足したら、context は必須
+type RouterOptions = { context: RouterContext };
+
 // ルーティングだけを担当する。画面に何をどう描くかは知らない
-export function createRouter(app: Hono): Router {
+export function createRouter(
+  app: Hono,
+  ...[options]: undefined extends RouterContext ? [options?: Partial<RouterOptions>] : [options: RouterOptions]
+): Router {
+  const context = options?.context;
+  // Hono には第 2 引数（c.env）で渡す。action と middleware は c.env から読む
+  const fetchRoute = (req: Request) => app.fetch(req, context as object | undefined);
   const listeners = new Set<(state: RouterState) => void>();
   let state: RouterState = { matches: [], params: {}, location: { pathname: "", search: "" }, navigating: false };
   let started = false;
@@ -216,7 +232,7 @@ export function createRouter(app: Hono): Router {
   type Loading = { promise: Promise<unknown>; settled?: { ok: true; data: unknown } | { ok: false; error: unknown } };
 
   function startLoad(segment: Segment, params: Record<string, string>, request: Request, search: unknown): Loading {
-    const loading: Loading = { promise: Promise.resolve().then(() => segment.loader?.({ params, request, search })) };
+    const loading: Loading = { promise: Promise.resolve().then(() => segment.loader?.({ params, request, search, context })) };
     loading.promise.then(
       (data) => (loading.settled = { ok: true, data }),
       (error) => (loading.settled = { ok: false, error }),
@@ -256,7 +272,7 @@ export function createRouter(app: Hono): Router {
     try {
       // ガードも通す。リダイレクトになるなら、何も取っておかない
       const req = new Request(url);
-      const res = await app.fetch(req);
+      const res = await fetchRoute(req);
       const match = matches.get(req);
       if ((res.status >= 300 && res.status < 400) || !match) return;
 
@@ -290,7 +306,7 @@ export function createRouter(app: Hono): Router {
 
     // Hono はマッチングとガード（middleware）だけをする。POST なら action も動く
     const req = new Request(url, { ...init, signal });
-    const res = await app.fetch(req);
+    const res = await fetchRoute(req);
     if (signal.aborted) return; // 待っている間に古くなったら知らせない
 
     const afterAction = revalidate || req.method === "POST";

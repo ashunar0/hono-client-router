@@ -1,9 +1,7 @@
-import type { MiddlewareHandler } from "hono";
-import { isLoggedIn } from "../../lib/session";
-import { href } from "@hcr/react";
+import { href, type Middleware } from "@hcr/react";
 
-const guard: MiddlewareHandler = async (c, next) => {
-  if (!isLoggedIn()) return c.redirect(href("/login"));
+const guard: Middleware = async (c, next) => {
+  if (!c.env.session.isLoggedIn()) return c.redirect(href("/login"));
   await next();
 };
 
