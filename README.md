@@ -67,16 +67,27 @@ export default guard;
 
 `LoaderArgs<"/users/:id">` と書くと、`params.id` に型が付きます。`request.signal` は、次の遷移が始まると abort されます。
 
-レイアウトとページの loader は、同時に呼ばれます。/users/1 → /users/2 のように同じレイアウトのまま移るときは、レイアウトの loader は呼び直さずにデータを使い回します（action のあとは呼び直します）。search params（`?page=2` など）は、loader が `request.url` から読みます。search params が変わったときは、全部の段の loader を呼び直します。
+レイアウトとページの loader は、同時に呼ばれます。/users/1 → /users/2 のように同じレイアウトのまま移るときは、レイアウトの loader は呼び直さずにデータを使い回します（action のあとは呼び直します）。search params（`?page=2` など）は、段ごとに `validateSearch` で受け付けるものを決めます。Standard Schema に対応したライブラリ（zod、valibot など）のスキーマを export すると、loader は検証済みで型の付いた `search` を受け取ります。検証したあとの search が変わった段だけ、loader を呼び直します。
+
+```tsx
+// src/routes/users/index.tsx
+export const validateSearch = z.object({
+  page: z.coerce.number().int().min(1).catch(1),
+});
+
+export const loader = ({ search, request }: LoaderArgs<"/users", typeof validateSearch>) =>
+  fetchUserPage(search.page, request.signal);
+```
 
 loader が失敗すると、その段から外側に向かっていちばん近い `ErrorComponent` を、その段の場所に出します。それより外側のレイアウトはそのまま描きます。どの段にも `ErrorComponent` がなければ、決まった表示を画面全体に出します。
 
 リンクにマウスを乗せて 50ms たつと（またはフォーカスすると）、その URL の loader を先に呼んでおきます（preload）。30 秒以内にクリックすれば、その結果を使います。届いていれば待たずに描き、取得の途中なら同じ取得の完了を待ちます。
 
-リンクは `href()` で作ると、パスと params に型が付きます。存在しないパスや足りない params は型エラーになります。
+リンクは `href()` で作ると、パスと params と search に型が付きます。存在しないパス、足りない params、受け付けない search は型エラーになります。
 
 ```tsx
-<a href={href("/users/:id", { id: "1" })}>ユーザー1</a>
+<a href={href("/users/:id", { params: { id: "1" } })}>ユーザー1</a>
+<a href={href("/users", { search: { page: 2 } })}>2 ページ目</a>
 ```
 
 `plugins/routes.ts`（Vite プラグイン）が `src/routes/` を読んで、ルートを Hono の app に登録する `src/routes.gen.ts` を書き出します。dev の間は、ファイルを足したり消したりすると書き直します。`routes.gen.ts` はコミットしません。
@@ -94,7 +105,7 @@ loader が失敗すると、その段から外側に向かっていちばん近�
 | レイアウト | `_layout.tsx` | `<Outlet />` |
 | loader のエラー | `ErrorComponent` | `ErrorBoundary` |
 | 404 | `_404.tsx` | `errorElement` |
-| search params | `new URL(request.url).searchParams` | 同じ |
+| search params | `validateSearch` と loader の `search` | `new URL(request.url).searchParams` |
 | 遷移の中断 | `request.signal` | `request.signal` |
 | 遷移中かどうか | `useNavigating()` | `useNavigation().state` |
 | 先読み | リンクにマウスを乗せると自動 | `<Link prefetch="intent">` |

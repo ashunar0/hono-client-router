@@ -1,11 +1,15 @@
+import { z } from "zod";
 import { fetchUserPage } from "../../lib/users";
 import { href, type LoaderArgs } from "../../router";
 
-// ?page=2 は、request.url から自分で読む。数字でないときや 1 より小さいときの扱いも、ここで決める
-export const loader = ({ request }: LoaderArgs) => {
-  const page = Math.max(1, Number(new URL(request.url).searchParams.get("page")) || 1);
-  return fetchUserPage(page, request.signal);
-};
+// このページが受け付ける search params。数字でないときや 1 より小さいときは 1 にする
+export const validateSearch = z.object({
+  page: z.coerce.number().int().min(1).catch(1),
+});
+
+// search は検証済みで、search.page は number
+export const loader = ({ search, request }: LoaderArgs<"/users", typeof validateSearch>) =>
+  fetchUserPage(search.page, request.signal);
 
 export default function UsersPage({ data }: { data: Awaited<ReturnType<typeof loader>> }) {
   return (
@@ -16,13 +20,13 @@ export default function UsersPage({ data }: { data: Awaited<ReturnType<typeof lo
       <ul>
         {data.users.map((user) => (
           <li>
-            <a href={href("/users/:id", { id: user.id })}>{user.name}</a>
+            <a href={href("/users/:id", { params: { id: user.id } })}>{user.name}</a>
           </li>
         ))}
       </ul>
       <p>
-        {data.page > 1 && <a href={`${href("/users")}?page=${data.page - 1}`}>前へ</a>}{" "}
-        {data.page < data.totalPages && <a href={`${href("/users")}?page=${data.page + 1}`}>次へ</a>}
+        {data.page > 1 && <a href={href("/users", { search: { page: data.page - 1 } })}>前へ</a>}{" "}
+        {data.page < data.totalPages && <a href={href("/users", { search: { page: data.page + 1 } })}>次へ</a>}
       </p>
     </>
   );

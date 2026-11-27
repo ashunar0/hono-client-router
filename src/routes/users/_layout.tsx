@@ -23,7 +23,7 @@ export default function UsersLayout({
         <ul>
           {data.map((user) => (
             <li>
-              <a href={href("/users/:id", { id: user.id })}>{user.name}</a>
+              <a href={href("/users/:id", { params: { id: user.id } })}>{user.name}</a>
             </li>
           ))}
         </ul>

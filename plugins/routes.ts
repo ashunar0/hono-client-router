@@ -1,8 +1,8 @@
 /**
  * src/routes のディレクトリから src/routes.gen.ts を書き出す。
  * ディレクトリの決まりは hono-kit に揃えている（ディレクトリが URL、1 ディレクトリに index.tsx が 1 つ）。
- * ページのファイルは、画面のコンポーネントを default export し、loader / Pending / ErrorComponent / action を名前付きで export する。
- * レイアウト（_layout.tsx）も、コンポーネントを default export し、loader / Pending / ErrorComponent を名前付きで export できる。
+ * ページのファイルは、画面のコンポーネントを default export し、validateSearch / loader / Pending / ErrorComponent / action を名前付きで export する。
+ * レイアウト（_layout.tsx）も、コンポーネントを default export し、validateSearch / loader / Pending / ErrorComponent を名前付きで export できる。
  * hono-kit にない決まりとして、_layout.tsx（レイアウト）、_middleware.ts（ガードなど）、_404.tsx（どれにも当たらないとき）を読む。
  *
  * Vite からはプラグインとして、それ以外（tsc の前）は `node plugins/routes.ts` で使う
@@ -74,6 +74,7 @@ export function generate(src: string) {
   // ディレクトリ → そのディレクトリの middleware / レイアウトの段の名前
   const middlewares = new Map<string, string>();
   const layouts = new Map<string, string>();
+  const layoutModules = new Map<string, string>();
   const pages: { path: string; module: string; dir: string }[] = [];
   let notFound: string | undefined;
 
@@ -94,6 +95,7 @@ export function generate(src: string) {
       imports.push(`import * as layoutModule${i} from "${importPath(file)}";`);
       segments.push(`const layout${i} = toSegment(${paramNamesOf(dir)}, layoutModule${i});`);
       layouts.set(dir, `layout${i}`);
+      layoutModules.set(dir, `layoutModule${i}`);
     } else if (NOT_FOUND_NAMES.includes(name) && dir === "") {
       imports.push(`import NotFound from "${importPath(file)}";`);
       notFound = "NotFound";
@@ -109,7 +111,7 @@ export function generate(src: string) {
   const lines = [
     "// src/routes から plugins/routes.ts が書き出す。手で直さない",
     'import { Hono, type MiddlewareHandler } from "hono";',
-    'import { putMatch, toRoute, toSegment, type Route } from "./router";',
+    'import { putMatch, toRoute, toSegment, type Route, type SearchOfModule } from "./router";',
     ...imports,
     "",
     "// レイアウトの段。同じレイアウトは、どのルートからも同じものを指す（データの使い回しに使う）",
@@ -143,10 +145,15 @@ export function generate(src: string) {
         ]
       : []),
     "",
-    "// ルートのパスの一覧を router.ts に教える。href() の型に使う",
+    "// ルートのパスと、そのルートの段が受け付ける search params を router.ts に教える。href() の型に使う",
     'declare module "./router" {',
     "  interface Register {",
-    `    routes: ${pages.length > 0 ? [...new Set(pages.map((p) => JSON.stringify(p.path)))].join(" | ") : "never"};`,
+    "    routes: {",
+    ...[...new Map(pages.map((p) => [p.path, p])).values()].map((p) => {
+      const modules = [...pick(layoutModules, p.dir), p.module];
+      return `      ${JSON.stringify(p.path)}: ${modules.map((m) => `SearchOfModule<typeof ${m}>`).join(" & ")};`;
+    }),
+    "    };",
     "  }",
     "}",
     "",

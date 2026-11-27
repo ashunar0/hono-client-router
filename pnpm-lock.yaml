@@ -11,6 +11,9 @@ importers:
       hono:
         specifier: ^4.13.21
         version: 4.13.21
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
     devDependencies:
       typescript:
         specifier: ^7.0.2
@@ -443,6 +446,9 @@ packages:
       yaml:
         optional: true
 
+  zod@4.6.7:
+    resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
+
 snapshots:
 
   '@emnapi/core@2.0.0-beta.2':
@@ -725,3 +731,5 @@ snapshots:
       tinyglobby: 0.2.17
     optionalDependencies:
       fsevents: 2.3.3
+
+  zod@4.6.7: {}

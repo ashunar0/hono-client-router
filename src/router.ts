@@ -1,10 +1,32 @@
 import type { Hono } from "hono";
 
+// ---- search params のスキーマ ----
+
+// Standard Schema（zod、valibot などが実装している共通の形）のうち、ここで使うところだけ
+export interface SearchSchema<Output = unknown> {
+  readonly "~standard": {
+    validate(
+      value: unknown,
+    ):
+      | { readonly value: Output; readonly issues?: undefined }
+      | { readonly issues: readonly { readonly message: string }[] }
+      | Promise<{ readonly value: Output; readonly issues?: undefined } | { readonly issues: readonly { readonly message: string }[] }>;
+    readonly types?: { readonly input: unknown; readonly output: Output } | undefined;
+  };
+}
+
+// スキーマが返す型。スキーマがなければ空
+type OutputOf<S> = S extends SearchSchema<infer O> ? O : Record<never, never>;
+
+// ページやレイアウトのファイルが受け付ける search params。リンクを作るときは、どれも省略できる
+export type SearchOfModule<M> = M extends { validateSearch: infer S } ? Partial<OutputOf<S>> : Record<never, never>;
+
 // ---- ルートの定義 ----
 
-// routes.gen.ts が declare module で routes を書き足す（ルートのパスの一覧）
+// routes.gen.ts が declare module で routes を書き足す（ルートのパス → そのルートの search params）
 export interface Register {}
-export type RoutePath = Register extends { routes: infer R extends string } ? R : string;
+type Routes = Register extends { routes: infer R } ? R : Record<string, Record<never, never>>;
+export type RoutePath = keyof Routes & string;
 
 // "/users/:id" → { id: string }。catch-all の ":path{.+}" も path になる
 type ParamsOf<P extends string> = P extends `${string}:${infer Name}/${infer Rest}`
@@ -14,14 +36,24 @@ type ParamsOf<P extends string> = P extends `${string}:${infer Name}/${infer Res
     : {};
 type StripPattern<Name extends string> = Name extends `${infer N}{${string}}` ? N : Name;
 
-// loader と action が受け取るもの。request.signal は、遷移が古くなったら abort される
-export type LoaderArgs<P extends string = string> = { params: ParamsOf<P>; request: Request };
-export type ActionArgs<P extends string = string> = LoaderArgs<P>;
+// loader と action が受け取るもの。request.signal は、遷移が古くなったら abort される。
+// search は、その段の validateSearch で検証したもの（S に typeof validateSearch を渡すと型が付く）
+export type LoaderArgs<P extends string = string, S = undefined> = {
+  params: ParamsOf<P>;
+  request: Request;
+  search: OutputOf<S>;
+};
+export type ActionArgs<P extends string = string> = { params: ParamsOf<P>; request: Request };
+
+// ルーターの側から見た loader の引数。ページごとの LoaderArgs<"/users/:id", ...> をどれも受け入れられるように、
+// 型引数を使わずに書く（型引数で比べると、search の型が合わないと判定されてしまう）
+type AnyLoaderArgs = { params: Record<string, string>; request: Request; search: unknown };
 
 // ページのファイル（index.tsx）とレイアウト（_layout.tsx）が export するもの。画面のコンポーネントは default export。
 // コンポーネントは adapter が描くので、ここでは中身を知らない
 export type RouteModule = {
-  loader?(args: LoaderArgs): unknown;
+  validateSearch?: SearchSchema;
+  loader?(args: AnyLoaderArgs): unknown;
   action?(args: ActionArgs): Response | Promise<Response>;
   Pending?: unknown;
   ErrorComponent?: unknown;
@@ -31,7 +63,8 @@ export type RouteModule = {
 // ルートの 1 段。全体のレイアウト、/users のレイアウト、ページ、のように外側から並ぶ
 export type Segment = {
   paramNames: string[]; // この段までの params の名前。変わらなければ、データを使い回せる
-  loader?(args: LoaderArgs): unknown;
+  validateSearch?: SearchSchema; // この段が受け付ける search params。検証した結果が変わらなければ、データを使い回せる
+  loader?(args: AnyLoaderArgs): unknown;
   Pending?: unknown;
   ErrorComponent?: unknown; // この段か、内側の段の loader が失敗したときに、この段の場所に出す
   Component?: unknown;
@@ -40,6 +73,7 @@ export type Segment = {
 // ファイルの中身から段を作る。routes.gen.ts が使う
 export const toSegment = (paramNames: string[], module: RouteModule): Segment => ({
   paramNames,
+  validateSearch: module.validateSearch,
   loader: module.loader,
   Pending: module.Pending,
   ErrorComponent: module.ErrorComponent,
@@ -60,18 +94,34 @@ export const toRoute = (layouts: Segment[], paramNames: string[], page: RouteMod
 
 // ---- リンクとリダイレクト ----
 
-// ルートのパスと params から URL を作る。存在しないパスや、足りない params は型エラーになる
+// href() の 2 つ目の引数。params が要るルートでは params が必須。search は、そのルートの段が受け付けるもの
+type HrefOptions<P extends string> = (keyof ParamsOf<P> extends never ? { params?: never } : { params: ParamsOf<P> }) & {
+  // search を 1 つも受け付けないルートでは、search を渡せない（{} だと余分なキーを見逃すため）
+  search?: P extends keyof Routes ? (keyof Routes[P] extends never ? never : Routes[P]) : never;
+};
+
+// ルートのパスと params / search から URL を作る。存在しないパス、足りない params、受け付けない search は型エラーになる。
 // P を RoutePath で縛らないのは、一覧にないパスのとき「引数の数が違う」ではなく
 // 「そのパスは一覧にない」というエラーにするため
 export function href<P extends string>(
-  path: P extends RoutePath ? P : RoutePath,
-  ...[params]: P extends RoutePath ? (keyof ParamsOf<P> extends never ? [] : [ParamsOf<P>]) : [params?: unknown]
+  path: P extends RoutePath ? P : keyof Routes & string,
+  ...[options]: P extends RoutePath
+    ? keyof ParamsOf<P> extends never
+      ? [options?: HrefOptions<P>]
+      : [options: HrefOptions<P>]
+    : [options?: unknown]
 ): string {
-  return path.replace(/:(\w+)(\{[^}]*\})?/g, (_, name: string) => {
-    const value = (params as Record<string, string>)[name];
+  const { params = {}, search = {} } = (options ?? {}) as {
+    params?: Record<string, string>;
+    search?: Record<string, unknown>;
+  };
+  const pathname = path.replace(/:(\w+)(\{[^}]*\})?/g, (_, name: string) =>
     // catch-all（{.+}）の値は a/b/c のようにスラッシュを含むので、段ごとにエンコードする
-    return value.split("/").map(encodeURIComponent).join("/");
-  });
+    params[name].split("/").map(encodeURIComponent).join("/"),
+  );
+  const entries = Object.entries(search).filter(([, value]) => value !== undefined);
+  const query = new URLSearchParams(entries.map(([key, value]) => [key, String(value)])).toString();
+  return query ? `${pathname}?${query}` : pathname;
 }
 
 // action から返すリダイレクト
@@ -94,6 +144,7 @@ export function putMatch(req: Request, route: Route, params: Record<string, stri
 export type SegmentState = {
   segment: Segment;
   status: "pending" | "success" | "error"; // loader の状態。loader がない段は最初から success
+  search: unknown; // この段の validateSearch で検証した search params
   data: unknown; // loader が返したもの
   error: unknown; // loader が投げたもの
 };
@@ -101,7 +152,6 @@ export type SegmentState = {
 export type RouterState = {
   matches: SegmentState[]; // いま出しているルートの段。外側から順
   params: Record<string, string>;
-  search: string; // URL の ? から後ろ。"?page=2" など
   navigating: boolean; // 遷移の途中か
 };
 
@@ -113,7 +163,7 @@ export type Router = {
 // ルーティングだけを担当する。画面に何をどう描くかは知らない
 export function createRouter(app: Hono): Router {
   const listeners = new Set<(state: RouterState) => void>();
-  let state: RouterState = { matches: [], params: {}, search: "", navigating: false };
+  let state: RouterState = { matches: [], params: {}, navigating: false };
   let started = false;
 
   function publish(next: Partial<RouterState>) {
@@ -147,8 +197,8 @@ export function createRouter(app: Hono): Router {
   // loader 1 回ぶんの呼び出し。終わったら結果が settled に入る（終わっていれば、待たずに使える）
   type Loading = { promise: Promise<unknown>; settled?: { ok: true; data: unknown } | { ok: false; error: unknown } };
 
-  function startLoad(segment: Segment, params: Record<string, string>, request: Request): Loading {
-    const loading: Loading = { promise: Promise.resolve().then(() => segment.loader?.({ params, request })) };
+  function startLoad(segment: Segment, params: Record<string, string>, request: Request, search: unknown): Loading {
+    const loading: Loading = { promise: Promise.resolve().then(() => segment.loader?.({ params, request, search })) };
     loading.promise.then(
       (data) => (loading.settled = { ok: true, data }),
       (error) => (loading.settled = { ok: false, error }),
@@ -156,12 +206,23 @@ export function createRouter(app: Hono): Router {
     return loading;
   }
 
-  // 前の画面の段のデータを、そのまま使い回せるか。同じ段で、その段の params も同じで、
-  // search params も同じならよい。search params が変わったら、どの段の loader も読むかもしれないので全部呼び直す
-  const reusable = (segment: Segment, params: Record<string, string>, search: string) => {
+  // URL の search params を、段の validateSearch で検証する。validateSearch がない段は、search params を使わない
+  type Validated = { ok: true; search: unknown } | { ok: false; error: Error };
+  async function validateSearchOf(segment: Segment, url: string): Promise<Validated> {
+    if (!segment.validateSearch) return { ok: true, search: {} };
+    const input = Object.fromEntries(new URL(url).searchParams);
+    const result = await segment.validateSearch["~standard"].validate(input);
+    if (result.issues) return { ok: false, error: new Error(result.issues.map((issue) => issue.message).join(", ")) };
+    return { ok: true, search: result.value };
+  }
+
+  // 前の画面の段のデータを、そのまま使い回せるか。同じ段で、その段の params も、検証した search params も同じならよい。
+  // validateSearch がない段は、search params が変わっても使い回せる
+  const reusable = (segment: Segment, params: Record<string, string>, search: unknown) => {
     const prev = state.matches.find((m) => m.segment === segment);
     const sameParams = segment.paramNames.every((name) => state.params[name] === params[name]);
-    return prev?.status === "success" && sameParams && state.search === search ? prev : undefined;
+    const sameSearch = JSON.stringify(prev?.search) === JSON.stringify(search);
+    return prev?.status === "success" && sameParams && sameSearch ? prev : undefined;
   };
 
   // preload した loader の呼び出しを、URL ごとに取っておく。30 秒たったら使わない
@@ -183,9 +244,11 @@ export function createRouter(app: Hono): Router {
 
       const entry = { at: Date.now(), loads: new Map<Segment, Loading>() };
       for (const segment of match.route.segments) {
-        // loader がない段と、遷移しても使い回される段は、取りに行かない
-        if (!segment.loader || reusable(segment, match.params, new URL(url).search)) continue;
-        const loading = startLoad(segment, match.params, req);
+        if (!segment.loader) continue;
+        // search params が通らない段と、遷移しても使い回される段は、取りに行かない
+        const validated = await validateSearchOf(segment, url);
+        if (!validated.ok || reusable(segment, match.params, validated.search)) continue;
+        const loading = startLoad(segment, match.params, req, validated.search);
         // 失敗した preload は取っておかない。クリックしたときに取り直す
         loading.promise.catch(() => preloads.get(url) === entry && preloads.delete(url));
         entry.loads.set(segment, loading);
@@ -227,11 +290,14 @@ export function createRouter(app: Hono): Router {
       // action がリダイレクトしなかったときは、同じ URL を GET で読み直す
       if (req.method === "POST") return navigate(url, undefined, scrollTop, true);
       // どのルートにも当たらず、_404 もないとき
-      return publish({ matches: [], params: {}, search: "", navigating: false });
+      return publish({ matches: [], params: {}, navigating: false });
     }
 
     const { route, params } = match;
-    const search = new URL(url).search;
+
+    // 段ごとに search params を検証する
+    const validated = await Promise.all(route.segments.map((segment) => validateSearchOf(segment, url)));
+    if (signal.aborted) return;
 
     // action のあとは、preload したものも含めて全部取り直す
     if (afterAction) preloads.clear();
@@ -244,14 +310,17 @@ export function createRouter(app: Hono): Router {
     // 3. どちらでもなければ、loader を呼ぶ
     const loadings: (Loading | undefined)[] = [];
     let next = route.segments.map((segment, i): SegmentState => {
-      const prev = afterAction ? undefined : reusable(segment, params, search);
+      const v = validated[i];
+      // search params が通らなければ、その段のエラーにする
+      if (!v.ok) return { segment, status: "error", search: undefined, data: undefined, error: v.error };
+      const prev = afterAction ? undefined : reusable(segment, params, v.search);
       if (prev) return prev;
-      if (!segment.loader) return { segment, status: "success", data: undefined, error: undefined };
+      if (!segment.loader) return { segment, status: "success", search: v.search, data: undefined, error: undefined };
 
-      const loading = preloaded?.loads.get(segment) ?? startLoad(segment, params, req);
+      const loading = preloaded?.loads.get(segment) ?? startLoad(segment, params, req, v.search);
       loadings[i] = loading;
-      if (loading.settled?.ok) return { segment, status: "success", data: loading.settled.data, error: undefined };
-      return { segment, status: "pending", data: undefined, error: undefined };
+      if (loading.settled?.ok) return { segment, status: "success", search: v.search, data: loading.settled.data, error: undefined };
+      return { segment, status: "pending", search: v.search, data: undefined, error: undefined };
     });
 
     // 新しい画面に切り替えてよいか。外側から見て最初の未完了の段が Pending を持っていれば、それを出せる。
@@ -261,7 +330,7 @@ export function createRouter(app: Hono): Router {
       return !first || first.status === "error" || Boolean(first.segment.Pending);
     };
     const show = () => {
-      if (showable(next)) publish({ matches: next, params, search, navigating: next.some((m) => m.status === "pending") });
+      if (showable(next)) publish({ matches: next, params, navigating: next.some((m) => m.status === "pending") });
     };
     show();
 
