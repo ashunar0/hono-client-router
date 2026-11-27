@@ -1,18 +1,19 @@
-import type { Context } from "hono";
+import { href, redirect } from "../../router";
 import { logIn } from "../../lib/session";
 
-export const GET = (c: Context) =>
-  c.render(
+export default function LoginPage() {
+  return (
     <>
       <h1>Login</h1>
-      <form method="post" action="/login">
+      <form method="post" action={href("/login")}>
         <button>ログイン</button>
       </form>
-    </>,
+    </>
   );
+}
 
-// フォーム送信を受ける（React Router でいう action）
-export const POST = (c: Context) => {
+// フォーム送信を受ける
+export const action = () => {
   logIn();
-  return c.redirect("/admin");
+  return redirect(href("/admin"));
 };

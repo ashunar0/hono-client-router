@@ -1,3 +1,3 @@
-import type { Context } from "hono";
-
-export const GET = (c: Context) => c.render(<p>ユーザーを選択してください</p>);
+export default function UsersPage() {
+  return <p>ユーザーを選択してください</p>;
+}

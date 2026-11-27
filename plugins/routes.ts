@@ -1,6 +1,7 @@
 /**
  * src/routes のディレクトリから src/routes.gen.ts を書き出す。
- * 決まりは hono-kit に揃えている（ディレクトリが URL、1 ディレクトリに index.tsx が 1 つ、メソッド名で export）。
+ * ディレクトリの決まりは hono-kit に揃えている（ディレクトリが URL、1 ディレクトリに index.tsx が 1 つ）。
+ * ページのファイルは、画面のコンポーネントを default export し、loader / Pending / action を名前付きで export する。
  * hono-kit にない決まりとして、_layout.tsx（レイアウト）、_middleware.ts（ガードなど）、_404.tsx（どれにも当たらないとき）を読む。
  *
  * Vite からはプラグインとして、それ以外（tsc の前）は `node plugins/routes.ts` で使う
@@ -68,7 +69,7 @@ export function generate(src: string) {
   const importPath = (file: string) => `./${path.relative(src, file).split(path.sep).join("/").replace(/\.tsx?$/, "")}`;
 
   const imports: string[] = [];
-  // ディレクトリ → そのディレクトリの middleware / layout を通す式
+  // ディレクトリ → そのディレクトリの middleware / layout の名前
   const middlewares = new Map<string, string>();
   const layouts = new Map<string, string>();
   const pages: { path: string; module: string; dir: string }[] = [];
@@ -85,41 +86,52 @@ export function generate(src: string) {
       middlewares.set(dir, `middleware${i}`);
     } else if (LAYOUT_NAMES.includes(name)) {
       imports.push(`import Layout${i} from "${importPath(file)}";`);
-      layouts.set(dir, `layout(Layout${i})`);
+      layouts.set(dir, `Layout${i}`);
     } else if (NOT_FOUND_NAMES.includes(name) && dir === "") {
-      imports.push(`import notFound from "${importPath(file)}";`);
-      notFound = "notFound";
+      imports.push(`import NotFound from "${importPath(file)}";`);
+      notFound = "NotFound";
     }
   });
 
-  // そのディレクトリまでに通る middleware と layout。外側から順に、同じディレクトリでは middleware が先
-  const chainOf = (dir: string) =>
-    ancestorsOf(dir).flatMap((d) => [middlewares.get(d), layouts.get(d)].filter((x) => x !== undefined));
+  // そのディレクトリまでに通る middleware / layout。外側から順に
+  const pick = (map: Map<string, string>, dir: string) =>
+    ancestorsOf(dir).flatMap((d) => (map.has(d) ? [map.get(d)!] : []));
 
   pages.sort((a, b) => byPath(a.path, b.path));
 
   const lines = [
     "// src/routes から plugins/routes.ts が書き出す。手で直さない",
-    'import { Hono, type Handler, type MiddlewareHandler } from "hono";',
-    'import { jsxRenderer, layout } from "./jsx-adapter";',
+    'import { Hono, type MiddlewareHandler } from "hono";',
+    'import { putMatch, toRoute, type Route } from "./router";',
     ...imports,
     "",
-    'const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const;',
-    "type PageModule = Partial<Record<(typeof METHODS)[number], Handler>>;",
-    "",
-    "// ページのファイルが export しているメソッドを、通る middleware と layout のあとに登録する",
-    "function page(app: Hono, path: string, module: PageModule, chain: MiddlewareHandler[]) {",
-    "  for (const method of METHODS) {",
-    "    const handler = module[method];",
-    "    if (handler) app.on(method, [path], ...chain, handler);",
+    "// Hono には middleware（ガード）と action だけを任せる。GET では、当たったルートを置いて返すだけ",
+    "function page(app: Hono, path: string, route: Route, middlewares: MiddlewareHandler[]) {",
+    "  if (route.Component) {",
+    "    app.on(\"GET\", [path], ...middlewares, (c) => {",
+    "      putMatch(c.req.raw, route, c.req.param() as Record<string, string>);",
+    "      return c.body(null);",
+    "    });",
+    "  }",
+    "  const action = route.action;",
+    "  if (action) {",
+    "    app.on(\"POST\", [path], ...middlewares, (c) =>",
+    "      action({ params: c.req.param() as Record<string, string>, request: c.req.raw }),",
+    "    );",
     "  }",
     "}",
     "",
     "export const app = new Hono();",
     "",
-    'app.use("*", jsxRenderer());',
-    ...pages.map((p) => `page(app, "${p.path}", ${p.module}, [${chainOf(p.dir).join(", ")}]);`),
-    ...(notFound ? [`app.all("*", ${[...chainOf(""), notFound].join(", ")});`] : []),
+    ...pages.map(
+      (p) =>
+        `page(app, "${p.path}", toRoute(${p.module}, [${pick(layouts, p.dir).join(", ")}]), [${pick(middlewares, p.dir).join(", ")}]);`,
+    ),
+    ...(notFound
+      ? [
+          `page(app, "*", { Component: ${notFound}, layouts: [${pick(layouts, "").join(", ")}] }, [${pick(middlewares, "").join(", ")}]);`,
+        ]
+      : []),
     "",
     "// ルートのパスの一覧を router.ts に教える。href() の型に使う",
     'declare module "./router" {',

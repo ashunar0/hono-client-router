@@ -1,12 +1,6 @@
 import type { Hono } from "hono";
 
-// ハンドラが描画したいもの（view）の置き場（Response とは別の「裏口」）
-const views = new WeakMap<Request, unknown>();
-
-// ハンドラ側から view を置く。何を置くかは描画側（adapter）が決める
-export function putView(req: Request, view: unknown) {
-  views.set(req, view);
-}
+// ---- ルートの定義 ----
 
 // routes.gen.ts が declare module で routes を書き足す（ルートのパスの一覧）
 export interface Register {}
@@ -19,6 +13,39 @@ type ParamsOf<P extends string> = P extends `${string}:${infer Name}/${infer Res
     ? { [K in StripPattern<Name>]: string }
     : {};
 type StripPattern<Name extends string> = Name extends `${infer N}{${string}}` ? N : Name;
+
+// loader と action が受け取るもの。request.signal は、遷移が古くなったら abort される
+export type LoaderArgs<P extends string = string> = { params: ParamsOf<P>; request: Request };
+export type ActionArgs<P extends string = string> = LoaderArgs<P>;
+
+// ページのファイル（index.tsx）が export するもの。画面のコンポーネントは default export。
+// コンポーネントは adapter が描くので、ここでは中身を知らない
+export type PageModule = {
+  loader?(args: LoaderArgs): unknown;
+  action?(args: ActionArgs): Response | Promise<Response>;
+  Pending?: unknown;
+  default?: unknown;
+};
+
+// ルーターが扱うルート。ページのファイルの中身に、外側から順のレイアウトを足したもの
+export type Route = {
+  loader?(args: LoaderArgs): unknown;
+  action?(args: ActionArgs): Response | Promise<Response>;
+  Pending?: unknown;
+  Component?: unknown;
+  layouts: unknown[];
+};
+
+// ページのファイルからルートを作る。routes.gen.ts が使う
+export const toRoute = (page: PageModule, layouts: unknown[]): Route => ({
+  loader: page.loader,
+  action: page.action,
+  Pending: page.Pending,
+  Component: page.default,
+  layouts,
+});
+
+// ---- リンクとリダイレクト ----
 
 // ルートのパスと params から URL を作る。存在しないパスや、足りない params は型エラーになる
 // P を RoutePath で縛らないのは、一覧にないパスのとき「引数の数が違う」ではなく
@@ -34,24 +61,45 @@ export function href<P extends string>(
   });
 }
 
-export type RouterState<View> = {
-  view: View | null; // いま出している画面
-  navigating: boolean; // 遷移の途中か（Hono の答えを待っている間は true）
+// action から返すリダイレクト
+export const redirect = (url: string) => new Response(null, { status: 302, headers: { Location: url } });
+
+// ---- Hono から「どのルートに当たったか」を受け取る ----
+
+type Match = { route: Route; params: Record<string, string> };
+
+// Hono のハンドラが置いていく、当たったルートの置き場（Response とは別の「裏口」）
+const matches = new WeakMap<Request, Match>();
+
+export function putMatch(req: Request, route: Route, params: Record<string, string>) {
+  matches.set(req, { route, params });
+}
+
+// ---- ルーター ----
+
+export type RouterState = {
+  match: Match | null; // いま出しているルート
+  status: "pending" | "success" | "error"; // loader の状態
+  data: unknown; // loader が返したもの
+  error: unknown; // loader が投げたもの
+  navigating: boolean; // 遷移の途中か
 };
 
-export type Router<View> = {
+export type Router = {
   // 状態が変わるたびに受け取る。登録した時点で状態があれば、すぐに 1 回呼ぶ
-  subscribe(listener: (state: RouterState<View>) => void): () => void;
+  subscribe(listener: (state: RouterState) => void): () => void;
 };
 
 // ルーティングだけを担当する。画面に何をどう描くかは知らない
-export function createRouter<View>(app: Hono): Router<View> {
-  const listeners = new Set<(state: RouterState<View>) => void>();
-  let state: RouterState<View> | undefined;
+export function createRouter(app: Hono): Router {
+  const listeners = new Set<(state: RouterState) => void>();
+  let state: RouterState = { match: null, status: "pending", data: undefined, error: undefined, navigating: false };
+  let started = false;
 
-  function publish(next: RouterState<View>) {
-    state = next;
-    for (const listener of listeners) listener(next);
+  function publish(next: Partial<RouterState>) {
+    state = { ...state, ...next };
+    started = true;
+    for (const listener of listeners) listener(state);
   }
 
   // スクロール位置の復元はブラウザに任せない。ブラウザは popstate の直後に戻そうとするが、
@@ -74,16 +122,17 @@ export function createRouter<View>(app: Hono): Router<View> {
   // いま進行中の遷移
   let current: AbortController | undefined;
 
-  // ② URL を Hono に渡して、ハンドラが置いた view を知らせる。描いたら scrollTop の位置にスクロールする
+  // ② Hono にどのルートかを聞いて、loader を呼び、結果を知らせる。描いたら scrollTop の位置にスクロールする
   async function navigate(url: string, init?: RequestInit, scrollTop = 0) {
     // 新しい遷移が始まったら、古い遷移は止める
     current?.abort();
     const controller = (current = new AbortController());
     const { signal } = controller;
 
-    // 前の画面は出したまま、遷移中であることだけを知らせる
-    if (!state?.navigating) publish({ view: state?.view ?? null, navigating: true });
+    // まずは前の画面のまま、遷移中であることだけを知らせる
+    if (!state.navigating) publish({ navigating: true });
 
+    // Hono はマッチングとガード（middleware）だけをする。POST なら action も動く
     const req = new Request(url, { ...init, signal });
     const res = await app.fetch(req);
     if (signal.aborted) return; // 待っている間に古くなったら知らせない
@@ -96,7 +145,29 @@ export function createRouter<View>(app: Hono): Router<View> {
       return navigate(next);
     }
 
-    publish({ view: (views.get(req) as View | undefined) ?? null, navigating: false });
+    const match = matches.get(req);
+    if (!match) {
+      // action がリダイレクトしなかったときは、同じ URL を GET で読み直す
+      if (req.method === "POST") return navigate(url, undefined, scrollTop);
+      // どのルートにも当たらず、_404 もないとき
+      return publish({ match: null, status: "success", data: undefined, error: undefined, navigating: false });
+    }
+
+    const { route, params } = match;
+
+    // Pending があるルートなら、データを待たずに、新しいレイアウトと Pending を先に出す
+    if (route.Pending) publish({ match, status: "pending", data: undefined, error: undefined });
+
+    // loader を呼ぶ。loader にも同じ request を渡すので、request.signal で中断に気づける
+    try {
+      const data = await route.loader?.({ params, request: req });
+      if (signal.aborted) return;
+      publish({ match, status: "success", data, error: undefined, navigating: false });
+    } catch (error) {
+      if (signal.aborted) return; // 中断で投げられたものはエラーではない
+      publish({ match, status: "error", data: undefined, error, navigating: false });
+    }
+
     // 描画が DOM に反映されるのを待ってからスクロールする
     requestAnimationFrame(() => scrollTo(0, scrollTop));
   }
@@ -138,7 +209,7 @@ export function createRouter<View>(app: Hono): Router<View> {
   return {
     subscribe(listener) {
       listeners.add(listener);
-      if (state) listener(state);
+      if (started) listener(state);
       return () => listeners.delete(listener);
     },
   };

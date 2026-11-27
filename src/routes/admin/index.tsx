@@ -1,3 +1,3 @@
-import type { Context } from "hono";
-
-export const GET = (c: Context) => c.render(<h1>Admin</h1>);
+export default function AdminPage() {
+  return <h1>Admin</h1>;
+}
