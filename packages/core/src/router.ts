@@ -36,6 +36,9 @@ export type RoutePath = keyof Routes & string;
 export type RouteChild = Register extends { child: infer C } ? C : unknown;
 // loader / action / middleware に渡すもの。アプリが declare module で Register に context を書き足し、createRouter に渡す
 export type RouterContext = Register extends { context: infer C } ? C : undefined;
+// loader / action が受け取る context のうち、createRouter に渡した部分。渡していなければ空。
+// RouterContext extends object ? ... と書くと、Disjoint の中で keyof が計算されずに残り、重なっていなくても型エラーになる
+export type BaseContext = RouterContext extends undefined ? {} : RouterContext;
 
 // "/users/:id" → { id: string }。catch-all の ":path{.+}" も path になる
 type ParamsOf<P extends string> = P extends `${string}:${infer Name}/${infer Rest}`
@@ -47,17 +50,24 @@ type StripPattern<Name extends string> = Name extends `${infer N}{${string}}` ? 
 
 // loader と action が受け取るもの。request.signal は、遷移が古くなったら abort される。
 // search は、その段の validateSearch で検証したもの（S に typeof validateSearch を渡すと型が付く）。
-// context は、createRouter に渡したもの
-export type LoaderArgs<P extends string = string, S = undefined> = {
+// context は、createRouter に渡したものに、通ってきた middleware が c.set() したものを足したもの（C に渡す）
+export type LoaderArgs<P extends string = string, S = undefined, C = BaseContext> = {
   params: ParamsOf<P>;
   request: Request;
   search: OutputOf<S>;
-  context: RouterContext;
+  context: C;
 };
-export type ActionArgs<P extends string = string> = { params: ParamsOf<P>; request: Request; context: RouterContext };
+export type ActionArgs<P extends string = string, C = BaseContext> = { params: ParamsOf<P>; request: Request; context: C };
 
-// _middleware.ts の型。c.env で context を読める
-export type Middleware = MiddlewareHandler<{ Bindings: RouterContext extends object ? RouterContext : object }>;
+// _middleware.ts の型。c.env で createRouter に渡した context を読める。
+// V は、この middleware が c.set() するもの。配下の loader / action の context に足される
+export type Middleware<V extends object = {}> = MiddlewareHandler<{ Bindings: BaseContext; Variables: V }>;
+
+// middleware の型から、c.set() するものを取り出す。生成した型（+types）が使う
+export type VarsOf<M> = M extends Middleware<infer V> ? V : {};
+
+// 外側の context に、middleware が c.set() するものを足す。同じ名前があれば型エラーにする（上書きで隠れないように）
+export type Disjoint<A, B extends { [K in keyof A & keyof B]: "この名前は外側の context にもある" }> = A & B;
 
 // ルーターの側から見た loader の引数。ページごとの LoaderArgs<"/users/:id", ...> をどれも受け入れられるように、
 // 型引数を使わずに書く（型引数で比べると、search の型が合わないと判定されてしまう）
@@ -146,13 +156,14 @@ export const redirect = (url: string) => new Response(null, { status: 302, heade
 
 // ---- Hono から「どのルートに当たったか」を受け取る ----
 
-type Match = { route: Route; params: Record<string, string> };
+// vars は、通ってきた middleware が c.set() したもの（c.var）
+type Match = { route: Route; params: Record<string, string>; vars: object };
 
 // Hono のハンドラが置いていく、当たったルートの置き場（Response とは別の「裏口」）
 const matches = new WeakMap<Request, Match>();
 
-export function putMatch(req: Request, route: Route, params: Record<string, string>) {
-  matches.set(req, { route, params });
+export function putMatch(req: Request, route: Route, params: Record<string, string>, vars: object) {
+  matches.set(req, { route, params, vars });
 }
 
 // ---- ルーター ----
@@ -231,8 +242,11 @@ export function createRouter(
   // loader 1 回ぶんの呼び出し。終わったら結果が settled に入る（終わっていれば、待たずに使える）
   type Loading = { promise: Promise<unknown>; settled?: { ok: true; data: unknown } | { ok: false; error: unknown } };
 
-  function startLoad(segment: Segment, params: Record<string, string>, request: Request, search: unknown): Loading {
-    const loading: Loading = { promise: Promise.resolve().then(() => segment.loader?.({ params, request, search, context })) };
+  // loader に渡す context。createRouter に渡したものに、middleware が c.set() したものを足す
+  function startLoad(match: Match, segment: Segment, request: Request, search: unknown): Loading {
+    const { params, vars } = match;
+    const args = { params, request, search, context: { ...context, ...vars } };
+    const loading: Loading = { promise: Promise.resolve().then(() => segment.loader?.(args)) };
     loading.promise.then(
       (data) => (loading.settled = { ok: true, data }),
       (error) => (loading.settled = { ok: false, error }),
@@ -282,7 +296,7 @@ export function createRouter(
         // search params が通らない段と、遷移しても使い回される段は、取りに行かない
         const validated = await validateSearchOf(segment, url);
         if (!validated.ok || reusable(segment, match.params, validated.search)) continue;
-        const loading = startLoad(segment, match.params, req, validated.search);
+        const loading = startLoad(match, segment, req, validated.search);
         // 失敗した preload は取っておかない。クリックしたときに取り直す
         loading.promise.catch(() => preloads.get(url) === entry && preloads.delete(url));
         entry.loads.set(segment, loading);
@@ -352,7 +366,7 @@ export function createRouter(
       if (prev) return prev;
       if (!segment.loader) return { segment, status: "success", search: v.search, data: undefined, error: undefined };
 
-      const loading = preloaded?.loads.get(segment) ?? startLoad(segment, params, req, v.search);
+      const loading = preloaded?.loads.get(segment) ?? startLoad(match, segment, req, v.search);
       loadings[i] = loading;
       if (loading.settled?.ok) return { segment, status: "success", search: v.search, data: loading.settled.data, error: undefined };
       return { segment, status: "pending", search: v.search, data: undefined, error: undefined };

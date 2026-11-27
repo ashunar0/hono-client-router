@@ -116,6 +116,23 @@ const router = createRouter(app, { context });
 
 action と middleware は Hono の中で動くので、ルーターは `app.fetch(request, context)` の第 2 引数で渡しています。Cloudflare Workers で env（バインディング）を渡すのと同じ通り道なので、Hono の側では `c.env` で読めます。
 
+`_middleware.ts` が `c.set()` したものは、そのディレクトリ配下の loader と action の `context` に足されます。足すものの型は `Middleware<{ ... }>` に書きます。生成する型は、そのファイルの上にある `_middleware.ts` だけを足すので、配下でないページで `context.user` と書くと型エラーになります。外側の context と同じ名前を足すと、上書きで隠れないように `routes.gen.ts` が型エラーになります。
+
+```tsx
+// src/routes/admin/_middleware.ts
+const guard: Middleware<{ user: User }> = async (c, next) => {
+  const user = c.env.session.user();
+  if (!user) return c.redirect(href("/login"));
+  c.set("user", user);
+  await next();
+};
+
+// src/routes/admin/index.tsx
+export const loader = ({ context }: Route.LoaderArgs) => ({ name: context.user.name });
+```
+
+React Router v7 は、型の付いた鍵（`createContext<User>()`）で `context.set()` / `context.get()` します。鍵の型は入っているものの形を保証しますが、その middleware を通ったか（本当に入っているか）は実行時にしかわかりません。このルーターは middleware をディレクトリに置き、型を生成するので、通ってきた middleware が型でわかります。
+
 loader が失敗すると、その段から外側に向かっていちばん近い `ErrorComponent` を、その段の場所に出します。それより外側のレイアウトはそのまま描きます。どの段にも `ErrorComponent` がなければ、決まった表示を画面全体に出します。
 
 リンクにマウスを乗せて 50ms たつと（またはフォーカスすると）、その URL の loader を先に呼んでおきます（preload）。30 秒以内にクリックすれば、その結果を使います。届いていれば待たずに描き、取得の途中なら同じ取得の完了を待ちます。
@@ -154,6 +171,7 @@ navigate(href("/users", { search: { q } }), { replace: true, resetScroll: false 
 | search params | `validateSearch` と loader の `search` | `new URL(request.url).searchParams` |
 | 遷移の中断 | `request.signal` | `request.signal` |
 | loader / action に依存を渡す | `createRouter(app, { context })` | `context`（サーバーでは `getLoadContext`） |
+| middleware から loader に渡す | `c.set()` → `context.user` | `context.set(key)` → `context.get(key)` |
 | 遷移中かどうか | `useNavigating()` | `useNavigation().state` |
 | リンク | `<Link>`（今いるページなら `aria-current="page"`） | `<NavLink>` |
 | コードから遷移 | `useNavigate()` | `useNavigate()` |

@@ -69,20 +69,31 @@ function ancestorsOf(dir: string) {
 // 書き出すコードが import するルーター本体
 const CORE = "@hcr/core";
 
-function typesFileOf(src: string, file: string, routePath: string, kind: "page" | "layout") {
+// middlewares は、そのファイルまでに通る _middleware.ts のファイル（外側から順）。
+// それぞれが c.set() するものを、外側から順に context に足す
+function typesFileOf(src: string, file: string, routePath: string, kind: "page" | "layout", middlewares: string[]) {
   const rel = path.relative(src, file).split(path.sep).join("/"); // routes/users/[id]/index.tsx
   const dir = path.posix.dirname(rel);
   const base = path.posix.basename(rel).replace(/\.tsx?$/, "");
   const virtualDir = `${dir}/+types`; // src から見た、型のファイルの置き場所
   const out = path.join(path.dirname(src), ".routes-types", path.basename(src), virtualDir, `${base}.ts`);
+  const middlewareImports = middlewares.map((m, i) => {
+    const target = path.relative(src, m).split(path.sep).join("/").replace(/\.tsx?$/, "");
+    return `import type middleware${i} from "${path.posix.relative(virtualDir, target)}";`;
+  });
+  const context = middlewares.reduce((acc, _, i) => `Disjoint<${acc}, VarsOf<typeof middleware${i}>>`, "BaseContext");
   const code = [
     "// @hcr/core/vite が書き出す。手で直さない",
-    `import type { ActionArgs as Action, LoaderArgs as Args, LoaderDataOfModule, RouteChild, SchemaOfModule } from "${CORE}";`,
+    `import type { ActionArgs as Action, BaseContext, Disjoint, LoaderArgs as Args, LoaderDataOfModule, RouteChild, SchemaOfModule, VarsOf } from "${CORE}";`,
     `import type * as Module from "../${base}";`,
+    ...middlewareImports,
+    "",
+    "// createRouter に渡した context に、通ってきた middleware が c.set() するものを足したもの",
+    `type Context = ${context};`,
     "",
     "export namespace Route {",
-    `  export type LoaderArgs = Args<${JSON.stringify(routePath)}, SchemaOfModule<typeof Module>>;`,
-    ...(kind === "page" ? [`  export type ActionArgs = Action<${JSON.stringify(routePath)}>;`] : []),
+    `  export type LoaderArgs = Args<${JSON.stringify(routePath)}, SchemaOfModule<typeof Module>, Context>;`,
+    ...(kind === "page" ? [`  export type ActionArgs = Action<${JSON.stringify(routePath)}, Context>;`] : []),
     kind === "layout"
       ? "  export type ComponentProps = { data: LoaderDataOfModule<typeof Module>; search: LoaderArgs[\"search\"]; children?: RouteChild };"
       : "  export type ComponentProps = { data: LoaderDataOfModule<typeof Module>; search: LoaderArgs[\"search\"] };",
@@ -113,13 +124,20 @@ export function generate(src: string) {
   const paramNamesOf = (dir: string) =>
     JSON.stringify(dir.split("/").flatMap((s) => /^\[(?:\.\.\.)?(\w+)\]$/.exec(s)?.[1] ?? []));
 
+  // ディレクトリ → そのディレクトリの _middleware.ts のファイル。型のファイルが import する
+  const middlewareFiles = new Map(
+    files.filter((f) => MIDDLEWARE_NAMES.includes(path.basename(f))).map((f) => [dirOf(f), f]),
+  );
+  const middlewaresOf = (dir: string) =>
+    ancestorsOf(dir).flatMap((d) => (middlewareFiles.has(d) ? [middlewareFiles.get(d)!] : []));
+
   files.forEach((file, i) => {
     const name = path.basename(file);
     const dir = dirOf(file);
     if (PAGE_NAMES.includes(name)) {
       imports.push(`import * as page${i} from "${importPath(file)}";`);
       pages.push({ path: routePathOf(dir), module: `page${i}`, dir });
-      types.push(typesFileOf(src, file, routePathOf(dir), "page"));
+      types.push(typesFileOf(src, file, routePathOf(dir), "page", middlewaresOf(dir)));
     } else if (MIDDLEWARE_NAMES.includes(name)) {
       imports.push(`import middleware${i} from "${importPath(file)}";`);
       middlewares.set(dir, `middleware${i}`);
@@ -128,7 +146,7 @@ export function generate(src: string) {
       segments.push(`const layout${i} = toSegment(${paramNamesOf(dir)}, layoutModule${i});`);
       layouts.set(dir, `layout${i}`);
       layoutModules.set(dir, `layoutModule${i}`);
-      types.push(typesFileOf(src, file, routePathOf(dir), "layout"));
+      types.push(typesFileOf(src, file, routePathOf(dir), "layout", middlewaresOf(dir)));
     } else if (NOT_FOUND_NAMES.includes(name) && dir === "") {
       imports.push(`import NotFound from "${importPath(file)}";`);
       notFound = "NotFound";
@@ -144,24 +162,24 @@ export function generate(src: string) {
   const lines = [
     "// src/routes から @hcr/core/vite が書き出す。手で直さない",
     'import { Hono, type MiddlewareHandler } from "hono";',
-    `import { putMatch, toRoute, toSegment, type Route, type SearchOfModule } from "${CORE}";`,
+    `import { putMatch, toRoute, toSegment, type BaseContext, type Disjoint, type Route, type SearchOfModule, type VarsOf } from "${CORE}";`,
     ...imports,
     "",
     "// レイアウトの段。同じレイアウトは、どのルートからも同じものを指す（データの使い回しに使う）",
     ...segments,
     "",
-    "// Hono には middleware（ガード）と action だけを任せる。GET では、当たったルートを置いて返すだけ",
+    "// Hono には middleware（ガード）と action だけを任せる。GET では、当たったルートと、middleware が c.set() したものを置いて返すだけ",
     "function page(app: Hono, path: string, route: Route, middlewares: MiddlewareHandler[]) {",
     "  if (route.segments.at(-1)?.Component) {",
     "    app.on(\"GET\", [path], ...middlewares, (c) => {",
-    "      putMatch(c.req.raw, route, c.req.param() as Record<string, string>);",
+    "      putMatch(c.req.raw, route, c.req.param() as Record<string, string>, c.var);",
     "      return c.body(null);",
     "    });",
     "  }",
     "  const action = route.action;",
     "  if (action) {",
     "    app.on(\"POST\", [path], ...middlewares, (c) =>",
-    "      action({ params: c.req.param() as Record<string, string>, request: c.req.raw, context: c.env }),",
+    "      action({ params: c.req.param() as Record<string, string>, request: c.req.raw, context: { ...c.env, ...c.var } }),",
     "    );",
     "  }",
     "}",
@@ -177,6 +195,15 @@ export function generate(src: string) {
           `page(app, "*", toRoute([${pick(layouts, "").join(", ")}], [], { default: ${notFound} }), [${pick(middlewares, "").join(", ")}]);`,
         ]
       : []),
+    "",
+    "// middleware が c.set() するものが、外側の context（createRouter に渡したものと、外側の middleware が足したもの）と",
+    "// 重ならないかを確かめる。重なっていれば、ここが型エラーになる。",
+    "// +types でも同じ型を作るが、+types はページが import しないとチェックされないので、ここにも書く",
+    "export type ContextCheck = [",
+    ...[...middlewares.keys()].map(
+      (dir) => `  ${pick(middlewares, dir).reduce((acc, m) => `Disjoint<${acc}, VarsOf<typeof ${m}>>`, "BaseContext")},`,
+    ),
+    "];",
     "",
     "// ルートのパスと、そのルートの段が受け付ける search params を @hcr/core に教える。href() の型に使う",
     `declare module "${CORE}" {`,

@@ -1,10 +1,12 @@
 // ログイン状態（メモリ上だけ。リロードすると消える）。main.tsx で 1 つ作り、context で渡す
+export type User = { id: string; name: string };
+
 export function createSession() {
-  let loggedIn = false;
+  let user: User | null = null;
   return {
-    isLoggedIn: () => loggedIn,
+    user: () => user,
     logIn() {
-      loggedIn = true;
+      user = { id: "1", name: "管理者" };
     },
   };
 }
