@@ -190,17 +190,19 @@ navigate(href("/users", { search: { q } }), { replace: true, resetScroll: false 
 - `@hcr/core`（ルーティング）：ブラウザと Hono の間をつなぎ、loader を呼び、状態を `subscribe` 先に知らせる。画面のことは知らない
 - adapter（`@hcr/hono-jsx` / `@hcr/react`、描画）：状態を見て、レイアウトの中に `Pending` / 画面のコンポーネント / エラーのどれかを描画する
 
-1. `<a>` のクリックとフォーム送信を横取りし、`history.pushState` で URL を更新する
-2. URL から `Request` を作り、`app.fetch` に渡す。Hono は当たったルートと params を置いて、本文が空の `Response` を返す
-3. `Response` が 3xx なら `Location` 先へ `history.replaceState` し、もう一度 2 から実行する
+1. Navigation API の `navigate` イベントで、ページの中で起きる遷移（リンクのクリック、フォーム送信、戻る・進む、`navigation.navigate()`）を横取りする（`e.intercept()`）。URL と履歴はブラウザが更新する
+2. 行き先の URL から `Request` を作り、`app.fetch` に渡す。POST のフォームなら、`e.formData` を本文にする。Hono は当たったルートと params を置いて、本文が空の `Response` を返す
+3. `Response` が 3xx なら、`navigation.navigate(Location, { history: "replace" })` で遷移し直す
 4. 当たったルートを、外側から順の段（全体のレイアウト、/users のレイアウト、ページ）の並びにする
 5. 各段の `loader` を同時に呼ぶ。届いたものから、その段のコンポーネントに渡して描く。まだ届いていない段には、その段の `Pending` を描く
 6. 外側から見て最初の未完了の段に `Pending` がなければ、前の画面のまま待つ。その間は `useNavigating()` が true になる
-7. `popstate`（戻る・進む）では URL を積まずに 2 から実行する
+7. 描き終わったら `e.scroll()` を呼ぶ
 
-スクロール位置は、ブラウザの自動復元を止めて（`history.scrollRestoration = "manual"`）ルーターが戻します。`pushState` で履歴の項目ごとに key を付けて、その項目を離れるときの位置を覚えておきます。新しいページは一番上から、戻る・進むでは覚えておいた位置から表示します。
+横取りしないものは、ブラウザに任せます。同じページの `#hash` への移動（`e.hashChange`）、ダウンロードのリンク、別オリジンへの遷移、新しいタブで開く操作（Ctrl/Cmd クリックなど。`navigate` イベント自体が来ません）です。
 
-新しい遷移が始まると、`AbortController` で前の遷移を中断します。これにより、遅れて届いた古いデータで画面が上書きされることはありません。
+スクロールは、`e.intercept({ scroll: "manual" })` で止めておき、新しい画面を描いてから `e.scroll()` でブラウザに任せます。新しいページは一番上から（URL に `#hash` があればそこから）、戻る・進むではその項目を離れたときの位置から表示します。位置はブラウザが履歴の項目ごとに覚えているので、リロードしたあとでも戻ります。
+
+新しい遷移が始まると、前の遷移を中断します。`navigate` イベントの `e.signal` は、その遷移の handler が終わるまでしか abort されません。loader を裏で取り直している途中で次の遷移が来ることもあるので、ルーターは自分でも `AbortController` を持ち、`AbortSignal.any()` で `e.signal` とつないでいます。これにより、遅れて届いた古いデータで画面が上書きされることはありません。
 
 ### 当たったルートの受け渡し
 
@@ -245,6 +247,5 @@ pnpm build       # 両方をビルドして型をチェックする
 ## 未対応のこと
 
 - コンポーネントの描画中のエラーと、action のエラーを受けること（今は loader のエラーだけ）
-- スクロール位置をリロードのあとも残すこと（今はメモリに覚えているだけ）
-- `#section` のようなハッシュへのリンク
+- Navigation API がないブラウザ（Safari 26.2 / Firefox 147 より前）で動かすこと
 - 使われなかった preload の取得を止めることと、preload しないリンクを選ぶこと

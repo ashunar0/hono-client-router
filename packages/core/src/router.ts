@@ -196,6 +196,12 @@ export type Router = {
   navigate(to: Href, options?: NavigateOptions): void;
 };
 
+// navigation.navigate() の info で、navigate イベントに渡すもの
+type NavigateInfo = {
+  revalidate?: boolean; // action のあとのリダイレクト。レイアウトのデータも使い回さずに取り直す
+  resetScroll?: boolean; // false なら、描いたあとにスクロールしない
+};
+
 // createRouter の 2 つ目の引数。Register に context を書き足したら、context は必須
 type RouterOptions = {
   context: RouterContext;
@@ -223,24 +229,9 @@ export function createRouter(
     for (const listener of listeners) listener(state);
   }
 
-  // スクロール位置の復元はブラウザに任せない。ブラウザは popstate の直後に戻そうとするが、
-  // その時点ではまだ新しい画面を描いていないので、位置がずれる
-  history.scrollRestoration = "manual";
-
-  // 履歴の項目ごとに key を付けて、離れるときのスクロール位置を覚えておく
-  const positions = new Map<string, number>();
-  const newKey = () => crypto.randomUUID();
-  let currentKey: string = history.state?.key ?? newKey();
-  history.replaceState({ key: currentKey }, "");
-
-  // 新しい履歴の項目に移る。今の項目の位置を覚えてから積む
-  function push(url: string) {
-    positions.set(currentKey, scrollY);
-    currentKey = newKey();
-    history.pushState({ key: currentKey }, "", url);
-  }
-
-  // いま進行中の遷移
+  // いま出している（または出そうとしている）遷移。新しい遷移が始まったら abort する。
+  // navigate イベントの e.signal は handler が終わるまでしか abort されないので、
+  // handler のあとも続く裏の取り直しを止めるために、自分でも持つ
   let current: AbortController | undefined;
 
   // ---- loader の呼び出しとキャッシュ ----
@@ -342,13 +333,14 @@ export function createRouter(
     }
   }
 
-  // ② Hono にどのルートかを聞いて、loader を呼び、結果を知らせる。描いたら scrollTop の位置にスクロールする。
+  // ② Hono にどのルートかを聞いて、loader を呼び、結果を知らせる。待つ必要のある loader が全部届いたら true を返す。
+  // 途中で古くなったり、別の URL に遷移し直したりしたら false。
   // revalidate が true なら、レイアウトのデータも使い回さずに取り直す（action のあと）
-  async function navigate(url: string, init?: RequestInit, scrollTop = 0, revalidate = false) {
+  async function navigate(url: string, init?: RequestInit, revalidate = false, eventSignal?: AbortSignal): Promise<boolean> {
     // 新しい遷移が始まったら、古い遷移は止める
     current?.abort();
     const controller = (current = new AbortController());
-    const { signal } = controller;
+    const signal = eventSignal ? AbortSignal.any([controller.signal, eventSignal]) : controller.signal;
 
     // まずは前の画面のまま、遷移中であることだけを知らせる
     if (!state.navigating) publish({ navigating: true });
@@ -356,32 +348,33 @@ export function createRouter(
     // Hono はマッチングとガード（middleware）だけをする。POST なら action も動く
     const req = new Request(url, { ...init, signal });
     const res = await fetchRoute(req);
-    if (signal.aborted) return; // 待っている間に古くなったら知らせない
+    if (signal.aborted) return false; // 待っている間に古くなったら知らせない
 
     const afterAction = revalidate || req.method === "POST";
 
-    // リダイレクト: Location 先に履歴を置き換えて、遷移し直す
+    // リダイレクト: 今の履歴の項目を Location 先で置き換える遷移を、新しく始める（この遷移はそこで止まる）
     const location = res.headers.get("Location");
     if (res.status >= 300 && res.status < 400 && location) {
       const next = new URL(location, url).href;
-      history.replaceState({ key: currentKey }, "", next);
-      return navigate(next, undefined, 0, afterAction);
+      navigation.navigate(next, { history: "replace", info: { revalidate: afterAction } satisfies NavigateInfo });
+      return false;
     }
 
     const match = matches.get(req);
     if (!match) {
       // action がリダイレクトしなかったときは、同じ URL を GET で読み直す
-      if (req.method === "POST") return navigate(url, undefined, scrollTop, true);
+      if (req.method === "POST") return navigate(url, undefined, true, eventSignal);
       // どのルートにも当たらず、_404 もないとき
       const { pathname, search } = new URL(url);
-      return publish({ matches: [], params: {}, location: { pathname, search }, navigating: false });
+      publish({ matches: [], params: {}, location: { pathname, search }, navigating: false });
+      return true;
     }
 
     const { route, params } = match;
 
     // 段ごとに search params を検証する
     const validated = await Promise.all(route.segments.map((segment) => validateSearchOf(segment, url)));
-    if (signal.aborted) return;
+    if (signal.aborted) return false;
 
     // action のあとは、キャッシュを全部捨てて取り直す。そうでなければ、長く使われなかったものだけ捨てる
     if (afterAction) cache.clear();
@@ -458,23 +451,28 @@ export function createRouter(
         show();
       }),
     );
-    if (signal.aborted) return;
-
-    // 描画が DOM に反映されるのを待ってからスクロールする
-    requestAnimationFrame(() => scrollTo(0, scrollTop));
+    return !signal.aborted;
   }
 
-  // ① <a> のクリックを横取りする → ③ pushState → ②
-  document.addEventListener("click", (e) => {
-    // 新しいタブで開く操作（Ctrl/Cmd クリックなど）はブラウザに任せる
-    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-
-    const a = (e.target as Element).closest("a");
-    if (!a || a.origin !== location.origin) return;
-
-    e.preventDefault();
-    push(a.href);
-    navigate(a.href);
+  // ① ページの中で起きる遷移（リンクのクリック、フォームの送信、戻る・進む、navigation.navigate()）を横取りする → ②。
+  // 新しいタブで開く操作では navigate イベント自体が来ない。別オリジンへの遷移は canIntercept が false になる。
+  // 同じページの #hash への移動と、ダウンロードのリンクはブラウザに任せる
+  navigation.addEventListener("navigate", (e) => {
+    if (!e.canIntercept || e.hashChange || e.downloadRequest !== null) return;
+    const info = e.info as NavigateInfo | undefined;
+    e.intercept({
+      // 新しい画面を描き終わるまで、スクロールさせない
+      scroll: "manual",
+      async handler() {
+        // POST のフォームなら、送信した中身が e.formData に入っている
+        const init = e.formData ? { method: "POST", body: e.formData } : undefined;
+        if (!(await navigate(e.destination.url, init, info?.revalidate, e.signal))) return;
+        // 描画が DOM に反映されるのを待ってから、ブラウザにスクロールさせる。
+        // 戻る・進むならその項目を離れたときの位置に、それ以外なら一番上（URL に #hash があればそこ）に移る
+        await new Promise(requestAnimationFrame);
+        if (info?.resetScroll !== false) e.scroll();
+      },
+    });
   });
 
   // リンクにマウスを乗せて 50ms たったら（またはフォーカスしたら）、preload する
@@ -497,33 +495,13 @@ export function createRouter(
     if (a) preload(a.href);
   });
 
-  // フォーム送信も横取りする → ③ pushState → ②（POST で）
-  document.addEventListener("submit", (e) => {
-    const form = e.target as HTMLFormElement;
-    if (form.method !== "post" || new URL(form.action).origin !== location.origin) return;
-
-    e.preventDefault();
-    push(form.action);
-    navigate(form.action, { method: "POST", body: new FormData(form) });
-  });
-
-  // ④ 戻る・進む → ②（pushState はしない）。その項目を離れたときの位置に戻す
-  window.addEventListener("popstate", (e) => {
-    // この時点で URL はもう変わっているが、スクロールはまだ前の項目のまま
-    positions.set(currentKey, scrollY);
-    currentKey = e.state?.key ?? newKey();
-    navigate(location.href, undefined, positions.get(currentKey) ?? 0);
-  });
-
-  // 最初の表示
-  navigate(location.href, undefined, scrollY);
+  // 最初の表示。navigate イベントは来ないので、自分で呼ぶ
+  navigate(location.href);
 
   return {
     navigate(to, { replace = false, resetScroll = true } = {}) {
       const url = new URL(to, location.href).href;
-      if (replace) history.replaceState({ key: currentKey }, "", url);
-      else push(url);
-      navigate(url, undefined, resetScroll ? 0 : scrollY);
+      navigation.navigate(url, { history: replace ? "replace" : "push", info: { resetScroll } satisfies NavigateInfo });
     },
     subscribe(listener) {
       listeners.add(listener);
