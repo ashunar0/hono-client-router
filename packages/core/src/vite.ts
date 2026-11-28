@@ -192,7 +192,7 @@ export function generate(src: string) {
     ),
     ...(notFound
       ? [
-          `page(app, "*", toRoute([${pick(layouts, "").join(", ")}], [], { default: ${notFound} }), [${pick(middlewares, "").join(", ")}]);`,
+          `page(app, "*", { ...toRoute([${pick(layouts, "").join(", ")}], [], { default: ${notFound} }), notFound: true }, [${pick(middlewares, "").join(", ")}]);`,
         ]
       : []),
     "",

@@ -102,15 +102,17 @@ export const loader = ({ search, request, context }: Route.LoaderArgs) =>
 loader と action と middleware が使うもの（API クライアント、ログイン状態など）は、ルートのファイルで import せずに、`createRouter` に `context` として渡します。型は `Register` に書き足すと、`Route.LoaderArgs` / `Route.ActionArgs` の `context` と、`Middleware` の `c.env` に付きます。`context` を渡し忘れると型エラーになります。
 
 ```tsx
-// src/main.tsx
-const context = { users, session: createSession() };
+// src/context.ts
+export const createContext = (cookie: CookieJar) => ({ users, session: createSession(cookie) });
 
 declare module "@hcr/core" {
   interface Register {
-    context: typeof context;
+    context: ReturnType<typeof createContext>;
   }
 }
 
+// src/main.tsx
+const context = createContext({ get: () => /* document.cookie から読む */, set: (value) => /* document.cookie に書く */ });
 const router = createRouter(app, { context });
 ```
 
@@ -204,6 +206,45 @@ navigate(href("/users", { search: { q } }), { replace: true, resetScroll: false 
 
 新しい遷移が始まると、前の遷移を中断します。`navigate` イベントの `e.signal` は、その遷移の handler が終わるまでしか abort されません。loader を裏で取り直している途中で次の遷移が来ることもあるので、ルーターは自分でも `AbortController` を持ち、`AbortSignal.any()` で `e.signal` とつないでいます。これにより、遅れて届いた古いデータで画面が上書きされることはありません。
 
+### サーバーでも同じ app を動かす
+
+ふつうの SPA では、サーバーはルートの表を知らないので、どの URL にも `index.html` を 200 で返します。無いページも、ログインが要るページも、ブラウザで JS が動いてから 404 の画面を描いたり、リダイレクトしたりします。HTTP のステータスは 200 のままです。
+
+このルーターのルートの表は Hono の app なので、同じ app をサーバーにも置けます。`@hcr/core/server` の `pages()` は、ページを開いたとき（GET）に、ブラウザと同じ `app.fetch` でルートを判定し、正しいステータスで HTML を返します。
+
+| サーバーで `app.fetch` した結果 | 返すもの |
+|---|---|
+| ページに当たった | HTML を 200 で |
+| `_404.tsx` に当たった、どのルートにも当たらなかった | HTML を 404 で |
+| middleware がリダイレクトした | そのリダイレクト（HTML は返さない） |
+| middleware がほかのステータスを返した | HTML をそのステータスで |
+
+```ts
+// src/server.ts
+const server = new Hono();
+// server.route("/api", api) のように、API も同じ Hono に置ける
+server.get(
+  "*",
+  pages(app, {
+    html, // <div id="app"></div> と、src/main.tsx を読み込む <script> を入れた HTML
+    context: (c) =>
+      createContext({
+        get: () => getCookie(c, "session"),
+        set: (value) => setCookie(c, "session", value, { path: "/" }),
+      }),
+  }),
+);
+export default server;
+```
+
+- loader と画面は、サーバーでは動かしません（SSR はしません）。サーバーがするのは、ルートの判定と、middleware を通すことだけです
+- `context` は、ブラウザで `createRouter` に渡すものと同じ形のものを、リクエストごとに作ります。ログイン状態は人によって違うからです。サンプルでは、ブラウザは `document.cookie`、サーバーはリクエストの Cookie ヘッダーから、同じ cookie を読みます
+- サーバーのガードがよくするのは、ステータスと、「画面が一瞬見えてからリダイレクトされる」ことです。データを守るのは、loader が呼ぶ API の側です
+- dev では、`@hono/vite-dev-server` が `src/server.ts` を動かします。`.tsx` などのファイルは Vite が返します
+- ビルドは 2 回です。`vite build --mode client` で `src/main.tsx` から `dist/static/client.js` を作り、`vite build`（`@hono/vite-build/node`）で `src/server.ts` から Node で動く `dist/index.js` を作ります。`dist/index.js` は `/static/*` のファイルも返します。HTML が読み込むスクリプトは、dev では `/src/main.tsx`、ビルドしたあとは `/static/client.js` です（`import.meta.env.PROD` で切り替えます）。`index.html` はありません
+
+React Router の SPA モードや data mode、TanStack Router の SPA では、loader をブラウザで動かしたまま、サーバーでルートを判定することはできません。正しいステータスを返すには、loader がサーバーで動く構成（React Router の framework mode の `ssr: true`、TanStack Start）にする必要があります。
+
 ### 当たったルートの受け渡し
 
 `Response` には「どのルートに当たったか」を入れる場所がありません。そのため、Hono のハンドラは当たったルートと params を `Request` をキーにした `WeakMap` に置き、本文が空の `Response` を返します。ルーターは `Response` でステータスとリダイレクトを判定し、当たったルートは `WeakMap` から受け取ります。
@@ -213,6 +254,7 @@ navigate(href("/users", { search: { q } }), { replace: true, resetScroll: false 
 ```
 packages/
   core/src/router.ts       ルーター本体（画面のことは知らない）
+  core/src/server.ts       サーバーで同じ app を動かし、正しいステータスで HTML を返す pages()
   core/src/vite.ts         src/routes から routes.gen.ts と .routes-types/ を書き出す Vite プラグイン
   hono-jsx/src/index.tsx   hono/jsx/dom 用の adapter
   react/src/index.tsx      React 用の adapter
@@ -221,7 +263,9 @@ apps/
   react/                   React 版のサンプル
     src/routes/            ルート定義
     src/lib/               サンプルのログイン状態とデータ取得
-    src/main.tsx           ルート定義とルーターをつなぎ、context を渡す
+    src/context.ts         loader / action / middleware に渡す context の作り方と型
+    src/main.tsx           ブラウザ：ルート定義とルーターをつなぎ、context を渡す
+    src/server.ts          サーバー：同じルート定義で、ページを開いたときのステータスを決める
     src/routes.gen.ts      生成される。コミットしない
     .routes-types/         ルートごとの型（+types）。生成される。コミットしない
 notes/                     学習ノート（書いた時点の記録。今の構成とは違うところがある）
@@ -234,6 +278,7 @@ pnpm install
 pnpm dev         # hono/jsx 版（apps/hono-jsx）
 pnpm dev:react   # React 版（apps/react）
 pnpm build       # 両方をビルドして型をチェックする
+pnpm --filter @hcr/app-hono-jsx start   # ビルドしたサーバーを Node で動かす（http://localhost:3000）
 ```
 
 ## adapter の役割
@@ -248,4 +293,6 @@ pnpm build       # 両方をビルドして型をチェックする
 
 - コンポーネントの描画中のエラーと、action のエラーを受けること（今は loader のエラーだけ）
 - Navigation API がないブラウザ（Safari 26.2 / Firefox 147 より前）で動かすこと
+- SSR（サーバーで loader と画面を動かして、HTML を作ること）
+- middleware がリダイレクト以外のステータス（403 など）を返したときに、ブラウザで出す画面
 - 使われなかった preload の取得を止めることと、preload しないリンクを選ぶこと

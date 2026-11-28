@@ -1,16 +1,14 @@
 import { createRouter, mountRouter } from "@hcr/hono-jsx";
-import * as users from "./lib/users";
-import { createSession } from "./lib/session";
+import { createContext } from "./context";
 import { app } from "./routes.gen";
 
-// loader / action / middleware に渡すもの。ルートのファイルは lib を直接 import せず、context から使う
-const context = { users, session: createSession() };
-
-declare module "@hcr/core" {
-  interface Register {
-    context: typeof context;
-  }
-}
+// ブラウザでは document.cookie を読み書きする
+const context = createContext({
+  get: () => document.cookie.match(/(?:^|; )session=([^;]*)/)?.[1],
+  set: (value) => {
+    document.cookie = `session=${value}; path=/; SameSite=Lax`;
+  },
+});
 
 const router = createRouter(app, { context });
 mountRouter(router, document.getElementById("app")!);

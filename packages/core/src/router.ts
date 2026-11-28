@@ -108,6 +108,7 @@ export const toSegment = (paramNames: string[], module: RouteModule): Segment =>
 export type Route = {
   segments: Segment[];
   action?(args: ActionArgs): Response | Promise<Response>;
+  notFound?: boolean; // _404.tsx のルート。サーバーは 404 を返す
 };
 
 // レイアウトの段と、ページのファイルからルートを作る。routes.gen.ts が使う
@@ -165,6 +166,9 @@ const matches = new WeakMap<Request, Match>();
 export function putMatch(req: Request, route: Route, params: Record<string, string>, vars: object) {
   matches.set(req, { route, params, vars });
 }
+
+// app.fetch(req) のあとに、当たったルートを取り出す。サーバー（@hcr/core/server）も使う
+export const matchOf = (req: Request) => matches.get(req);
 
 // ---- ルーター ----
 
