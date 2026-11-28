@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="660" viewBox="0 0 720 660" font-family="-apple-system, 'Hiragino Sans', 'Noto Sans JP', sans-serif" font-size="14">
+  <style>
+    .box { fill: #f6f8fa; stroke: #57606a; stroke-width: 1.5; }
+    .end { fill: #ddf4ff; stroke: #0969da; stroke-width: 1.5; }
+    .server { fill: #fff8c5; stroke: #9a6700; stroke-width: 1.5; }
+    .drop { fill: #fff1f0; stroke: #cf222e; stroke-width: 1.5; }
+    .line { fill: none; stroke: #57606a; stroke-width: 1.5; }
+    .divider { fill: none; stroke: #d0d7de; stroke-width: 1.5; stroke-dasharray: 6 6; }
+    .text { fill: #1f2328; }
+    .head { fill: #57606a; font-size: 13px; font-weight: bold; }
+    .label { fill: #57606a; font-size: 12px; }
+    .arrow { fill: #57606a; }
+    @media (prefers-color-scheme: dark) {
+      .box { fill: #161b22; stroke: #8b949e; }
+      .end { fill: #0c2d4a; stroke: #4493f8; }
+      .server { fill: #2e2410; stroke: #d29922; }
+      .drop { fill: #3a1214; stroke: #f85149; }
+      .line { stroke: #8b949e; }
+      .divider { stroke: #30363d; }
+      .text { fill: #e6edf3; }
+      .head { fill: #8b949e; }
+      .label { fill: #8b949e; }
+      .arrow { fill: #8b949e; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="arrow"/>
+    </marker>
+  </defs>
+
+  <!-- 見出しと仕切り -->
+  <text class="head" x="180" y="30" text-anchor="middle">サーバー（1 回目のリクエストだけ）</text>
+  <text class="head" x="540" y="30" text-anchor="middle">ブラウザ</text>
+  <path class="divider" d="M 360 44 V 600"/>
+
+  <!-- 線：サーバー -->
+  <!-- 直接開く → pages() -->
+  <path class="line" d="M 190 104 V 138" marker-end="url(#arrow)"/>
+  <!-- pages() → 結果は？ -->
+  <path class="line" d="M 190 200 V 238" marker-end="url(#arrow)"/>
+  <!-- 結果は？ → 302 / 404 / 200 -->
+  <path class="line" d="M 190 320 V 345 H 80 V 368" marker-end="url(#arrow)"/>
+  <path class="line" d="M 190 320 V 368" marker-end="url(#arrow)"/>
+  <path class="line" d="M 190 345 H 300 V 368" marker-end="url(#arrow)"/>
+  <text class="label" x="80" y="340" text-anchor="middle">リダイレクト</text>
+  <text class="label" x="300" y="340" text-anchor="middle">ページ</text>
+  <text class="label" x="200" y="360">_404</text>
+  <!-- 302 → 開き直す -->
+  <path class="line" d="M 30 390 H 14 V 82 H 88" marker-end="url(#arrow)"/>
+  <text class="label" x="20" y="74">開き直す</text>
+  <!-- 404 / 200 → ブラウザ -->
+  <path class="line" d="M 190 414 V 470 H 398" marker-end="url(#arrow)"/>
+  <path class="line" d="M 300 414 V 470"/>
+  <text class="label" x="330" y="462" text-anchor="middle">HTML</text>
+
+  <!-- 線：ブラウザ -->
+  <!-- ページの中の遷移 → navigate -->
+  <path class="line" d="M 540 184 V 438" marker-end="url(#arrow)"/>
+  <text class="label" x="550" y="320">リンク・送信・戻る進む</text>
+  <!-- navigate → 描く -->
+  <path class="line" d="M 540 500 V 538" marker-end="url(#arrow)"/>
+
+  <!-- ノード：サーバー -->
+  <rect class="end" x="90" y="60" width="200" height="44" rx="22"/>
+  <text class="text" x="190" y="87" text-anchor="middle">URL を直接開く・リロード</text>
+
+  <rect class="server" x="40" y="140" width="300" height="60" rx="6"/>
+  <text class="text" x="190" y="164" text-anchor="middle" font-weight="bold">pages()</text>
+  <text class="text" x="190" y="186" text-anchor="middle" font-size="13">app.fetch(req, サーバーの context)</text>
+
+  <polygon class="server" points="190,240 270,280 190,320 110,280"/>
+  <text class="text" x="190" y="285" text-anchor="middle">当たったのは？</text>
+
+  <rect class="drop" x="30" y="370" width="100" height="44" rx="6"/>
+  <text class="text" x="80" y="397" text-anchor="middle">302</text>
+
+  <rect class="server" x="140" y="370" width="100" height="44" rx="6"/>
+  <text class="text" x="190" y="397" text-anchor="middle">404 + HTML</text>
+
+  <rect class="server" x="250" y="370" width="100" height="44" rx="6"/>
+  <text class="text" x="300" y="397" text-anchor="middle">200 + HTML</text>
+
+  <!-- ノード：ブラウザ -->
+  <rect class="end" x="420" y="140" width="240" height="44" rx="22"/>
+  <text class="text" x="540" y="167" text-anchor="middle">ページの中の遷移</text>
+
+  <rect class="box" x="400" y="440" width="280" height="60" rx="6"/>
+  <text class="text" x="540" y="464" text-anchor="middle" font-weight="bold">ルーター（createRouter）</text>
+  <text class="text" x="540" y="486" text-anchor="middle" font-size="13">app.fetch(req, ブラウザの context)</text>
+
+  <rect class="end" x="420" y="540" width="240" height="44" rx="22"/>
+  <text class="text" x="540" y="567" text-anchor="middle">loader を呼んで描く</text>
+
+  <!-- 注 -->
+  <text class="label" x="360" y="636" text-anchor="middle">サーバーの app.fetch とブラウザの app.fetch は、同じ routes.gen.ts の app。違うのは context だけ</text>
+</svg>
