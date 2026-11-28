@@ -197,7 +197,12 @@ export type Router = {
 };
 
 // createRouter の 2 つ目の引数。Register に context を書き足したら、context は必須
-type RouterOptions = { context: RouterContext };
+type RouterOptions = {
+  context: RouterContext;
+  // loader の結果を、取ってから何ミリ秒は新しいとみなすか（初期値は 0）。
+  // 古い結果しかなければ、それで描いてから裏で取り直す
+  staleTime?: number;
+};
 
 // ルーティングだけを担当する。画面に何をどう描くかは知らない
 export function createRouter(
@@ -205,6 +210,7 @@ export function createRouter(
   ...[options]: undefined extends RouterContext ? [options?: Partial<RouterOptions>] : [options: RouterOptions]
 ): Router {
   const context = options?.context;
+  const staleTime = options?.staleTime ?? 0;
   // Hono には第 2 引数（c.env）で渡す。action と middleware は c.env から読む
   const fetchRoute = (req: Request) => app.fetch(req, context as object | undefined);
   const listeners = new Set<(state: RouterState) => void>();
@@ -237,19 +243,54 @@ export function createRouter(
   // いま進行中の遷移
   let current: AbortController | undefined;
 
-  // ---- loader の呼び出しと preload ----
+  // ---- loader の呼び出しとキャッシュ ----
 
-  // loader 1 回ぶんの呼び出し。終わったら結果が settled に入る（終わっていれば、待たずに使える）
-  type Loading = { promise: Promise<unknown>; settled?: { ok: true; data: unknown } | { ok: false; error: unknown } };
+  // loader 1 回ぶんの呼び出し。終わったら結果が settled に、届いた時刻が at に入る（終わっていれば、待たずに使える）
+  type Loading = {
+    promise: Promise<unknown>;
+    // loader に渡した request.signal。届く前に abort されたら、もう使わない。
+    // 遷移が終わったあとも、次の遷移が始まると abort されるので、届いたものは見ない
+    signal: AbortSignal;
+    preload: boolean; // preload で呼んだものか。遷移で使うまでは、PRELOAD_STALE_MS のあいだ新しいとみなす
+    settled?: { ok: true; data: unknown } | { ok: false; error: unknown };
+    at?: number;
+  };
+
+  // loader の呼び出しを、段ごとに取っておく。鍵は、その段の params と、検証した search params。
+  // 失敗したものは取っておかない。action のあとは全部捨てる
+  const cache = new Map<Segment, Map<string, Loading>>();
+  const keyOf = (segment: Segment, params: Record<string, string>, search: unknown) =>
+    JSON.stringify([segment.paramNames.map((name) => params[name]), search]);
+  const cached = (segment: Segment, params: Record<string, string>, search: unknown) => {
+    const loading = cache.get(segment)?.get(keyOf(segment, params, search));
+    return loading && (loading.settled || !loading.signal.aborted) ? loading : undefined;
+  };
+  // 取得の途中か、届いてから ms 以内なら新しい
+  const fresh = (loading: Loading, ms: number) => !loading.settled || Date.now() - (loading.at ?? 0) < ms;
+
+  // 先読みしてからクリックするまでに取り直さないよう、preload した結果は 30 秒は新しいとみなす
+  const PRELOAD_STALE_MS = 30_000;
+  // 30 分使われなかった結果は捨てる
+  const GC_MS = 30 * 60_000;
 
   // loader に渡す context。createRouter に渡したものに、middleware が c.set() したものを足す
-  function startLoad(match: Match, segment: Segment, request: Request, search: unknown): Loading {
+  function startLoad(match: Match, segment: Segment, request: Request, search: unknown, preload = false): Loading {
     const { params, vars } = match;
     const args = { params, request, search, context: { ...context, ...vars } };
-    const loading: Loading = { promise: Promise.resolve().then(() => segment.loader?.(args)) };
+    const loading: Loading = { promise: Promise.resolve().then(() => segment.loader?.(args)), signal: request.signal, preload };
+
+    const key = keyOf(segment, params, search);
+    const entries = cache.get(segment) ?? new Map<string, Loading>();
+    cache.set(segment, entries.set(key, loading));
     loading.promise.then(
-      (data) => (loading.settled = { ok: true, data }),
-      (error) => (loading.settled = { ok: false, error }),
+      (data) => {
+        loading.settled = { ok: true, data };
+        loading.at = Date.now();
+      },
+      (error) => {
+        loading.settled = { ok: false, error };
+        if (entries.get(key) === loading) entries.delete(key);
+      },
     );
     return loading;
   }
@@ -273,15 +314,12 @@ export function createRouter(
     return prev?.status === "success" && sameParams && sameSearch ? prev : undefined;
   };
 
-  // preload した loader の呼び出しを、URL ごとに取っておく。30 秒たったら使わない
-  const PRELOAD_FRESH_MS = 30_000;
-  const preloads = new Map<string, { at: number; loads: Map<Segment, Loading> }>();
+  // ガードを通している途中の URL。同じ URL で何度も通さない
   const preloading = new Set<string>();
 
-  // その URL の loader を先に呼んでおく。リンクにマウスを乗せたときに使う
+  // その URL の loader を先に呼んで、キャッシュに入れておく。リンクにマウスを乗せたときに使う
   async function preload(url: string) {
-    const hit = preloads.get(url);
-    if ((hit && Date.now() - hit.at < PRELOAD_FRESH_MS) || preloading.has(url)) return;
+    if (preloading.has(url)) return;
     preloading.add(url);
     try {
       // ガードも通す。リダイレクトになるなら、何も取っておかない
@@ -290,18 +328,15 @@ export function createRouter(
       const match = matches.get(req);
       if ((res.status >= 300 && res.status < 400) || !match) return;
 
-      const entry = { at: Date.now(), loads: new Map<Segment, Loading>() };
       for (const segment of match.route.segments) {
         if (!segment.loader) continue;
-        // search params が通らない段と、遷移しても使い回される段は、取りに行かない
+        // search params が通らない段と、遷移しても使い回される段と、キャッシュが新しい段は、取りに行かない
         const validated = await validateSearchOf(segment, url);
         if (!validated.ok || reusable(segment, match.params, validated.search)) continue;
-        const loading = startLoad(match, segment, req, validated.search);
-        // 失敗した preload は取っておかない。クリックしたときに取り直す
-        loading.promise.catch(() => preloads.get(url) === entry && preloads.delete(url));
-        entry.loads.set(segment, loading);
+        const hit = cached(segment, match.params, validated.search);
+        if (hit && fresh(hit, Math.max(staleTime, PRELOAD_STALE_MS))) continue;
+        startLoad(match, segment, req, validated.search, true);
       }
-      preloads.set(url, entry);
     } finally {
       preloading.delete(url);
     }
@@ -348,16 +383,19 @@ export function createRouter(
     const validated = await Promise.all(route.segments.map((segment) => validateSearchOf(segment, url)));
     if (signal.aborted) return;
 
-    // action のあとは、preload したものも含めて全部取り直す
-    if (afterAction) preloads.clear();
-    const hit = preloads.get(url);
-    const preloaded = !afterAction && hit && Date.now() - hit.at < PRELOAD_FRESH_MS ? hit : undefined;
+    // action のあとは、キャッシュを全部捨てて取り直す。そうでなければ、長く使われなかったものだけ捨てる
+    if (afterAction) cache.clear();
+    for (const entries of cache.values()) {
+      for (const [key, loading] of entries) if (loading.at && Date.now() - loading.at > GC_MS) entries.delete(key);
+    }
 
     // 段ごとの状態を作る。
     // 1. 前の画面と同じ段で、その段の params も同じなら、データを使い回す
-    // 2. preload してあれば、その呼び出しを使う。もう届いていれば、待たずに success にする
-    // 3. どちらでもなければ、loader を呼ぶ
+    // 2. キャッシュが新しければ、それを使う。取得の途中なら、その完了を待つ
+    // 3. キャッシュが古ければ、それで描いて、裏で取り直す（refetches）
+    // 4. どれでもなければ、loader を呼ぶ
     const loadings: (Loading | undefined)[] = [];
+    const refetches: (Loading | undefined)[] = [];
     let next = route.segments.map((segment, i): SegmentState => {
       const v = validated[i];
       // search params が通らなければ、その段のエラーにする
@@ -366,9 +404,15 @@ export function createRouter(
       if (prev) return prev;
       if (!segment.loader) return { segment, status: "success", search: v.search, data: undefined, error: undefined };
 
-      const loading = preloaded?.loads.get(segment) ?? startLoad(match, segment, req, v.search);
-      loadings[i] = loading;
-      if (loading.settled?.ok) return { segment, status: "success", search: v.search, data: loading.settled.data, error: undefined };
+      const hit = cached(segment, params, v.search);
+      if (hit?.settled?.ok) {
+        const freshMs = hit.preload ? Math.max(staleTime, PRELOAD_STALE_MS) : staleTime;
+        if (!fresh(hit, freshMs)) refetches[i] = startLoad(match, segment, req, v.search);
+        hit.preload = false; // 遷移で使ったら、ふつうのキャッシュと同じ扱いにする
+        return { segment, status: "success", search: v.search, data: hit.settled.data, error: undefined };
+      }
+      if (hit) hit.preload = false;
+      loadings[i] = hit ?? startLoad(match, segment, req, v.search);
       return { segment, status: "pending", search: v.search, data: undefined, error: undefined };
     });
 
@@ -385,6 +429,18 @@ export function createRouter(
       }
     };
     show();
+
+    // 裏で取り直したものは、届いたら差し替える。失敗したら、古いデータのままにする
+    refetches.forEach((loading, i) =>
+      loading?.promise.then(
+        (data) => {
+          if (signal.aborted) return;
+          next = next.map((n, j) => (j === i ? { ...n, data } : n));
+          show();
+        },
+        () => {},
+      ),
+    );
 
     // loader は全部同時に呼んである。届いたものから順に知らせる。
     // loader には同じ request を渡しているので、request.signal で中断に気づける

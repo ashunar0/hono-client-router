@@ -135,7 +135,11 @@ React Router v7 は、型の付いた鍵（`createContext<User>()`）で `contex
 
 loader が失敗すると、その段から外側に向かっていちばん近い `ErrorComponent` を、その段の場所に出します。それより外側のレイアウトはそのまま描きます。どの段にも `ErrorComponent` がなければ、決まった表示を画面全体に出します。
 
-リンクにマウスを乗せて 50ms たつと（またはフォーカスすると）、その URL の loader を先に呼んでおきます（preload）。30 秒以内にクリックすれば、その結果を使います。届いていれば待たずに描き、取得の途中なら同じ取得の完了を待ちます。
+loader の結果は、段ごとに、その段の params と検証した search params を鍵にして取っておきます。戻る・進むなどで同じ鍵の段をまた描くときは、取っておいた結果ですぐに描き、裏で loader を呼び直して、届いたら差し替えます（stale-while-revalidate）。取り直しに失敗したときは、古い結果のまま出しておきます。`createRouter(app, { staleTime: 60_000 })` のように渡すと、取ってからその時間のあいだは呼び直しません（初期値は 0）。action のあとは、取っておいた結果を全部捨てます。30 分使われなかった結果も捨てます。
+
+リンクにマウスを乗せて 50ms たつと（またはフォーカスすると）、その URL の loader を先に呼んでおきます（preload）。結果は同じところに取っておき、30 秒以内にクリックすれば呼び直さずに使います。届いていれば待たずに描き、取得の途中なら同じ取得の完了を待ちます。
+
+React Router v7 は、loader の結果を取っておきません。遷移のたびに loader を呼び、取っておきたいときは HTTP のキャッシュか TanStack Query などを使う、という考え方です。TanStack Router は、このルーターと同じく stale-while-revalidate で取っておきます（`staleTime` の初期値も 0）。
 
 リンクは `href()` で作ると、パスと params と search に型が付きます。存在しないパス、足りない params、受け付けない search は型エラーになります。
 
@@ -176,6 +180,7 @@ navigate(href("/users", { search: { q } }), { replace: true, resetScroll: false 
 | リンク | `<Link>`（今いるページなら `aria-current="page"`） | `<NavLink>` |
 | コードから遷移 | `useNavigate()` | `useNavigate()` |
 | 先読み | リンクにマウスを乗せると自動 | `<Link prefetch="intent">` |
+| loader の結果を取っておく | 段ごとに取っておく（`staleTime`） | 取っておかない（HTTP のキャッシュなどに任せる） |
 
 ## 仕組み
 
