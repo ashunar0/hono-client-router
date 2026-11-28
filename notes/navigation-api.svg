@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="700" viewBox="0 0 640 700" font-family="-apple-system, 'Hiragino Sans', 'Noto Sans JP', sans-serif" font-size="14">
+  <style>
+    .box { fill: #f6f8fa; stroke: #57606a; stroke-width: 1.5; }
+    .end { fill: #ddf4ff; stroke: #0969da; stroke-width: 1.5; }
+    .drop { fill: #fff1f0; stroke: #cf222e; stroke-width: 1.5; }
+    .browser { fill: #dafbe1; stroke: #1a7f37; stroke-width: 1.5; }
+    .line { fill: none; stroke: #57606a; stroke-width: 1.5; }
+    .text { fill: #1f2328; }
+    .label { fill: #57606a; font-size: 12px; }
+    .arrow { fill: #57606a; }
+    @media (prefers-color-scheme: dark) {
+      .box { fill: #161b22; stroke: #8b949e; }
+      .end { fill: #0c2d4a; stroke: #4493f8; }
+      .drop { fill: #3a1214; stroke: #f85149; }
+      .browser { fill: #0f2d1a; stroke: #3fb950; }
+      .line { stroke: #8b949e; }
+      .text { fill: #e6edf3; }
+      .label { fill: #8b949e; }
+      .arrow { fill: #8b949e; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="arrow"/>
+    </marker>
+  </defs>
+
+  <!-- 線 -->
+  <!-- きっかけ → 横取りする？ -->
+  <path class="line" d="M 320 64 V 98" marker-end="url(#arrow)"/>
+  <text class="label" x="330" y="86">navigate イベント</text>
+  <!-- 横取りする？ → ブラウザに任せる -->
+  <path class="line" d="M 410 140 H 488" marker-end="url(#arrow)"/>
+  <text class="label" x="449" y="132" text-anchor="middle">いいえ</text>
+  <!-- 横取りする？ → e.intercept -->
+  <path class="line" d="M 320 180 V 208" marker-end="url(#arrow)"/>
+  <text class="label" x="330" y="198">はい</text>
+  <!-- e.intercept → navigate -->
+  <path class="line" d="M 320 270 V 298" marker-end="url(#arrow)"/>
+  <!-- 最初の表示 → navigate -->
+  <path class="line" d="M 530 330 H 502" marker-end="url(#arrow)"/>
+  <!-- navigate → 中断された？ -->
+  <path class="line" d="M 320 360 V 388" marker-end="url(#arrow)"/>
+  <!-- 中断された？ → 捨てる -->
+  <path class="line" d="M 410 430 H 488" marker-end="url(#arrow)"/>
+  <text class="label" x="449" y="422" text-anchor="middle">はい</text>
+  <!-- 中断された？ → リダイレクト？ -->
+  <path class="line" d="M 320 470 V 508" marker-end="url(#arrow)"/>
+  <text class="label" x="330" y="494">いいえ</text>
+  <!-- リダイレクト？ → navigation.navigate -->
+  <path class="line" d="M 230 550 H 202" marker-end="url(#arrow)"/>
+  <text class="label" x="216" y="542" text-anchor="middle">はい</text>
+  <!-- navigation.navigate → きっかけ（新しい遷移） -->
+  <path class="line" d="M 110 528 V 42 H 218" marker-end="url(#arrow)"/>
+  <text class="label" x="100" y="300" text-anchor="end">やり直す</text>
+  <!-- リダイレクト？ → 描画 -->
+  <path class="line" d="M 320 590 V 628" marker-end="url(#arrow)"/>
+  <text class="label" x="330" y="614">いいえ</text>
+
+  <!-- ノード -->
+  <rect class="end" x="220" y="20" width="200" height="44" rx="22"/>
+  <text class="text" x="320" y="47" text-anchor="middle">遷移のきっかけ</text>
+
+  <polygon class="box" points="320,100 410,140 320,180 230,140"/>
+  <text class="text" x="320" y="145" text-anchor="middle">横取りする？</text>
+
+  <rect class="browser" x="490" y="118" width="130" height="44" rx="6"/>
+  <text class="text" x="555" y="145" text-anchor="middle">ブラウザに任せる</text>
+
+  <rect class="browser" x="140" y="210" width="360" height="60" rx="6"/>
+  <text class="text" x="320" y="234" text-anchor="middle" font-weight="bold">e.intercept()</text>
+  <text class="text" x="320" y="256" text-anchor="middle" font-size="13">URL と履歴はブラウザが更新する</text>
+
+  <rect class="box" x="140" y="300" width="360" height="60" rx="6"/>
+  <text class="text" x="320" y="324" text-anchor="middle" font-weight="bold">navigate</text>
+  <text class="text" x="320" y="346" text-anchor="middle" font-size="13">前の遷移を止めて、Request を作って Hono に渡す</text>
+
+  <rect class="box" x="532" y="308" width="96" height="44" rx="6"/>
+  <text class="text" x="580" y="335" text-anchor="middle">最初の表示</text>
+
+  <polygon class="box" points="320,390 410,430 320,470 230,430"/>
+  <text class="text" x="320" y="435" text-anchor="middle">中断された？</text>
+
+  <rect class="drop" x="490" y="408" width="130" height="44" rx="6"/>
+  <text class="text" x="555" y="435" text-anchor="middle">結果を捨てる</text>
+
+  <polygon class="box" points="320,510 410,550 320,590 230,550"/>
+  <text class="text" x="320" y="555" text-anchor="middle">リダイレクト？</text>
+
+  <rect class="box" x="20" y="528" width="180" height="44" rx="6"/>
+  <text class="text" x="110" y="548" text-anchor="middle" font-size="13">navigation.navigate()</text>
+  <text class="label" x="110" y="564" text-anchor="middle">history: "replace"</text>
+
+  <rect class="end" x="140" y="630" width="360" height="50" rx="25"/>
+  <text class="text" x="320" y="660" text-anchor="middle">描画して、e.scroll() でスクロールする</text>
+</svg>
